@@ -201,11 +201,11 @@ exports.msgpack = {
 
     // Expect no remaining bytes when unpacking 'b'
     test.deepEqual(msgpack.unpack(b), o);
-    test.deepEqual(msgpack.unpack.bytes_remaining, 0);
+    test.equal(msgpack.offset, b.length);
 
     // Expect 3 remaining bytes when unpacking 'bb'
     test.deepEqual(msgpack.unpack(bb), o);
-    test.equal(msgpack.unpack.bytes_remaining, 3);
+    test.equal(msgpack.offset, b.length);
 
     test.done();
   },

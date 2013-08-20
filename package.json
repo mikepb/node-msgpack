@@ -67,6 +67,9 @@
 	"directories": {
 		"lib": "lib"
 	},
+	"dependencies": {
+    "nan" : "~0.3.0"
+	},
   "optionalDependencies": {
     "nodeunit": "https://github.com/godsflaw/nodeunit/tarball/master"
   },

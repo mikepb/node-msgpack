@@ -6,7 +6,8 @@
 				'src/msgpack.cc',
 			],
 			'include_dirs': [
-				'deps/msgpack'
+				'deps/msgpack',
+		    "<!(node -p -e \"require('path').dirname(require.resolve('nan'))\")"
 			],
 			'dependencies': [
 				'deps/msgpack/msgpack.gyp:libmsgpack'

@@ -6,33 +6,25 @@
 #include <iostream>
 #include <vector>
 #include <stack>
+#include <assert.h>
+#include "nan.h"
 
 using namespace std;
 using namespace v8;
 using namespace node;
 
-#define SBUF_POOL 50000
+#define MSGPACK_SBUFFER_POOL_SIZE 50000
+static stack<msgpack_sbuffer *> sbuffers;
 
 // MSC does not support C99 trunc function.
 #ifdef _MSC_BUILD
 double trunc(double d){ return (d>0) ? floor(d) : ceil(d) ; }
 #endif
 
-static Persistent<FunctionTemplate> msgpack_unpack_template;
-
 // An exception class that wraps a textual message
-class MsgpackException {
-    public:
-        MsgpackException(const char *str) :
-            msg(String::New(str)) {
-        }
-
-        Handle<Value> getThrownException() {
-            return Exception::TypeError(msg);
-        }
-
-    private:
-        const Handle<String> msg;
+struct MsgpackException {
+    MsgpackException(const char *str) : msg(str) {}
+    const char *msg;
 };
 
 // A holder for a msgpack_zone object; ensures destruction on scope exit
@@ -48,8 +40,6 @@ class MsgpackZone {
             msgpack_zone_destroy(&this->_mz);
         }
 };
-
-static stack<msgpack_sbuffer *> sbuffers;
 
 #define DBG_PRINT_BUF(buf, name) \
     do { \
@@ -71,14 +61,11 @@ static stack<msgpack_sbuffer *> sbuffers;
     } while (0)
 
 // This will be passed to Buffer::New so that we can manage our own memory.
-// In other news, I am unsure what to do with hint, as I've never seen this
-// coding pattern before.  For now I have overloaded it to be a void pointer
-// to a msgpack_sbuffer.  This let's us push it onto the stack for use later.
 static void
-_free_sbuf(char *data, void *hint) {
+FreeMsgpackSbuffer(char *data, void *hint) {
     if (data != NULL && hint != NULL) {
         msgpack_sbuffer *sbuffer = (msgpack_sbuffer *)hint;
-        if (sbuffers.size() > SBUF_POOL ||
+        if (sbuffers.size() > MSGPACK_SBUFFER_POOL_SIZE ||
             sbuffer->alloc > (MSGPACK_SBUFFER_INIT_SIZE * 5)) {
             msgpack_sbuffer_free(sbuffer);
         } else {
@@ -96,8 +83,6 @@ _free_sbuf(char *data, void *hint) {
 // If a circular reference is detected, an exception is thrown.
 static void
 v8_to_msgpack(Handle<Value> v8obj, msgpack_object *mo, msgpack_zone *mz, size_t depth) {
-    static const Persistent<String> TOJSON = NODE_PSYMBOL("toJSON");
-
     if (512 < ++depth) {
         throw MsgpackException("Cowardly refusing to pack object with circular reference");
     }
@@ -120,24 +105,30 @@ v8_to_msgpack(Handle<Value> v8obj, msgpack_object *mo, msgpack_zone *mz, size_t 
             mo->via.i64 = static_cast<int64_t>(d);
         }
     } else if (v8obj->IsString()) {
+        size_t len = v8obj->ToString()->Utf8Length();
+
         mo->type = MSGPACK_OBJECT_RAW;
-        mo->via.raw.size = static_cast<uint32_t>(DecodeBytes(v8obj, UTF8));
+        mo->via.raw.size = static_cast<uint32_t>(len);
         mo->via.raw.ptr = (char*) msgpack_zone_malloc(mz, mo->via.raw.size);
 
-        DecodeWrite((char*) mo->via.raw.ptr, mo->via.raw.size, v8obj, UTF8);
+        NanFromV8String(v8obj, Nan::UTF8, NULL,
+            const_cast<char *>(mo->via.raw.ptr), len);
     } else if (v8obj->IsDate()) {
-        mo->type = MSGPACK_OBJECT_RAW;
+        // could be handled by that.toJSON()
         Handle<Date> date = Handle<Date>::Cast(v8obj);
-        Handle<Function> func = Handle<Function>::Cast(date->Get(String::New("toISOString")));
-        Handle<Value> argv[1] = {};
-        Handle<Value> result = func->Call(date, 0, argv);
-        mo->via.raw.size = static_cast<uint32_t>(DecodeBytes(result, UTF8));
+        Local<Function> fn = date->Get(NanSymbol("toISOString")).As<Function>();
+        Local<Value> str = fn->Call(date, 0, NULL);
+        size_t len = str->ToString()->Utf8Length();
+
+        mo->type = MSGPACK_OBJECT_RAW;
+        mo->via.raw.size = static_cast<uint32_t>(len);
         mo->via.raw.ptr = (char*) msgpack_zone_malloc(mz, mo->via.raw.size);
 
-        DecodeWrite((char*) mo->via.raw.ptr, mo->via.raw.size, result, UTF8);
+        NanFromV8String(str, Nan::UTF8, NULL,
+            const_cast<char *>(mo->via.raw.ptr), len);
     } else if (v8obj->IsArray()) {
         Local<Object> o = v8obj->ToObject();
-        Local<Array> a = Local<Array>::Cast(o);
+        Local<Array> a = o.As<Array>();
 
         mo->type = MSGPACK_OBJECT_ARRAY;
         mo->via.array.size = a->Length();
@@ -151,19 +142,16 @@ v8_to_msgpack(Handle<Value> v8obj, msgpack_object *mo, msgpack_zone *mz, size_t 
             v8_to_msgpack(v, &mo->via.array.ptr[i], mz, depth);
         }
     } else if (Buffer::HasInstance(v8obj)) {
-        Local<Object> buf = v8obj->ToObject();
-
-
         mo->type = MSGPACK_OBJECT_RAW;
-        mo->via.raw.size = static_cast<uint32_t>(Buffer::Length(buf));
-        mo->via.raw.ptr = Buffer::Data(buf);
+        mo->via.raw.size = static_cast<uint32_t>(Buffer::Length(v8obj));
+        mo->via.raw.ptr = Buffer::Data(v8obj);
     } else {
         Local<Object> o = v8obj->ToObject();
+        Local<Value> fn = o->Get(NanSymbol("toJSON"));
 
         // for o.toJSON()
-        if (o->Has(TOJSON) && o->Get(TOJSON)->IsFunction()) {
-            Local<Function> fn = Local<Function>::Cast(o->Get(TOJSON));
-            v8_to_msgpack(fn->Call(o, 0, NULL), mo, mz, depth);
+        if (fn->IsFunction()) {
+            v8_to_msgpack(fn.As<Function>()->Call(o, 0, NULL), mo, mz, depth);
             return;
         }
 
@@ -253,9 +241,8 @@ msgpack_to_v8(msgpack_object *mo) {
 //
 // Any number of objects can be provided as arguments, and all will be
 // serialized to the same bytestream, back-to-back.
-static Handle<Value>
-pack(const Arguments &args) {
-    HandleScope scope;
+NAN_METHOD(Pack) {
+    NanScope();
 
     msgpack_packer pk;
     MsgpackZone mz;
@@ -276,35 +263,21 @@ pack(const Arguments &args) {
         try {
             v8_to_msgpack(args[i], &mo, &mz._mz, 0);
         } catch (MsgpackException e) {
-            return ThrowException(e.getThrownException());
+            FreeMsgpackSbuffer(sb->data, sb);
+            return NanThrowError(e.msg);
         }
 
         if (msgpack_pack_object(&pk, mo)) {
-            return ThrowException(Exception::Error(
-                String::New("Error serializaing object")));
+            FreeMsgpackSbuffer(sb->data, sb);
+            return NanThrowError("Error serializing object");
         }
     }
 
-    v8::Local<Buffer> slowBuffer = node::Buffer::New(
-        sb->data, sb->alloc, _free_sbuf, (void *)sb
-    );
-
-    // godsflaw: this part makes msgpack.pack() 1x slower than JSON.stringify()
-    // reaching back into JS appears to be expensive.
-    v8::Local<Object> global = v8::Context::GetCurrent()->Global();
-    v8::Local<Value> bv = global->Get(String::NewSymbol("Buffer"));
-
-    assert(bv->IsFunction());
-
-    Local<Function> bc = v8::Local<Function>::Cast(bv);
-    Handle<Value> cArgs[3] = {
-        slowBuffer->handle_,
-        v8::Integer::New(sb->size),
-        v8::Integer::New(0)
-    };
-    v8::Local<Object> fastBuffer = bc->NewInstance(3, cArgs);
-
-    return scope.Close(fastBuffer);
+    // Use Object returned from Buffer::New
+    // https://github.com/joyent/node/issues/5864
+    NanReturnValue(NanNewBufferHandle(
+        sb->data, sb->size, FreeMsgpackSbuffer, (void *)sb
+    ));
 }
 
 // var o = msgpack.unpack(buf);
@@ -312,16 +285,12 @@ pack(const Arguments &args) {
 // Return the JavaScript object resulting from unpacking the contents of the
 // specified buffer. If the buffer does not contain a complete object, the
 // undefined value is returned.
-static Handle<Value>
-unpack(const Arguments &args) {
-    static Persistent<String> msgpack_bytes_remaining_symbol =
-        NODE_PSYMBOL("bytes_remaining");
-
-    HandleScope scope;
+Persistent<Object> persistentExports;
+NAN_METHOD(Unpack) {
+    NanScope();
 
     if (args.Length() < 0 || !Buffer::HasInstance(args[0])) {
-        return ThrowException(Exception::TypeError(
-            String::New("First argument must be a Buffer")));
+        return NanThrowError("First argument must be a Buffer");
     }
 
     Local<Object> buf = args[0]->ToObject();
@@ -331,42 +300,38 @@ unpack(const Arguments &args) {
     size_t off = 0;
 
     switch (msgpack_unpack(Buffer::Data(buf), Buffer::Length(buf), &off, &mz._mz, &mo)) {
-    case MSGPACK_UNPACK_EXTRA_BYTES:
+    case MSGPACK_UNPACK_EXTRA_BYTES: {
+        Local<Object> exports =
+            NanPersistentToLocal(persistentExports);
+        exports->Set(NanSymbol("offset"),
+            Integer::New(static_cast<int32_t>(off))
+        );
+    }
     case MSGPACK_UNPACK_SUCCESS:
         try {
-            msgpack_unpack_template->GetFunction()->Set(
-                msgpack_bytes_remaining_symbol,
-                Integer::New(static_cast<int32_t>(Buffer::Length(buf) - off))
-            );
-            return scope.Close(msgpack_to_v8(&mo));
+            NanReturnValue(msgpack_to_v8(&mo));
         } catch (MsgpackException e) {
-            return ThrowException(e.getThrownException());
+            NanThrowError(e.msg);
         }
 
     case MSGPACK_UNPACK_CONTINUE:
-        return scope.Close(Undefined());
+        NanReturnUndefined();
 
     default:
-        return ThrowException(Exception::Error(
-            String::New("Error de-serializing object")));
+        NanThrowError("Error de-serializing object");
     }
 }
 
 extern "C" void
-init(Handle<Object> target) {
-    HandleScope scope;
-
-    NODE_SET_METHOD(target, "pack", pack);
-
-    // Go through this mess rather than call NODE_SET_METHOD so that we can set
-    // a field on the function for 'bytes_remaining'.
-    msgpack_unpack_template = Persistent<FunctionTemplate>::New(
-        FunctionTemplate::New(unpack)
-    );
-    target->Set(
-        String::NewSymbol("unpack"),
-        msgpack_unpack_template->GetFunction()
-    );
+init(Handle<Object> exports) {
+    // Save `exports` so that we can set `offset`.
+    NanAssignPersistent(Object, persistentExports, exports);
+    // exports.pack
+    exports->Set(NanSymbol("pack"),
+        FunctionTemplate::New(Pack)->GetFunction());
+    // exports.unpack
+    exports->Set(NanSymbol("unpack"),
+        FunctionTemplate::New(Unpack)->GetFunction());
 }
 
 NODE_MODULE(msgpackBinding, init);
