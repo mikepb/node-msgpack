@@ -11,7 +11,7 @@ function _set_up(callback) {
       } catch (e) {
         test.equal(
           e.message,
-          'Cowardly refusing to pack object with circular reference'
+          'circular_structure'
         );
       }
   };
