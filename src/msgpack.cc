@@ -1,7 +1,7 @@
 #include <assert.h>
 
-#include <set>
 #include <stack>
+#include <tr1/unordered_set>
 
 #include <v8.h>
 #include <node.h>
@@ -137,14 +137,12 @@ pack_v8call(msgpack_object *mo, msgpack_zone *mz, Local<Value> val, Local<String
 }
 
 struct packdat {
-    packdat(Local<Value> v, msgpack_object *o)
-        : val(v), mo(o), popit(false) {}
-    packdat(bool p)
-        : popit(p) {}
+    packdat(Local<Value> v, msgpack_object *o, int id = 0)
+        : val(v), mo(o), erase_id(id) {}
 
     Local<Value> val;
     msgpack_object *mo;
-    bool popit;
+    int erase_id;
 };
 
 NAN_METHOD(SetOptions) {
@@ -196,9 +194,8 @@ NAN_METHOD(Pack) {
     if (!root_mos) return NanThrowError("alloc_error");
 
     // recursive
-    std::set<int>       id_hash_set;
-    std::stack<int>     id_hash_stack;
     std::stack<packdat> val_stack;
+    std::tr1::unordered_set<int> id_hash_set;
 
     // add arguments to stack
     for (int i = args.Length() - 1; 0 <= i; i--) {
@@ -214,11 +211,7 @@ NAN_METHOD(Pack) {
         val_stack.pop();
 
         // pop id hash
-        if (dat.popit) {
-            id_hash_set.erase(id_hash_stack.top());
-            id_hash_stack.pop();
-            continue;
-        }
+        if (dat.erase_id) id_hash_set.erase(dat.erase_id);
 
         // get local value
         Local<Value> val = dat.val;
@@ -320,8 +313,8 @@ NAN_METHOD(Pack) {
                     return NanThrowTypeError("circular_structure");
                 } else {
                     id_hash_set.insert(id_hash);
-                    id_hash_stack.push(id_hash);
-                    val_stack.push(true);
+                    if (!val_stack.empty())
+                        val_stack.top().erase_id = id_hash;
                 }
 
                 // pack array
@@ -332,7 +325,7 @@ NAN_METHOD(Pack) {
                         msgpack_zone_malloc(&mz, sizeof(msgpack_object) * len);
 
                     mo->type = MSGPACK_OBJECT_ARRAY;
-                    mo->via.array.size = static_cast<uint32_t>(len);
+                    mo->via.array.size = len;
                     mo->via.array.ptr = mos;
 
                     // push onto stack in reverse to be popped in order
@@ -346,7 +339,7 @@ NAN_METHOD(Pack) {
                         msgpack_zone_malloc(&mz, sizeof(msgpack_object_kv) * len);
 
                     mo->type = MSGPACK_OBJECT_MAP;
-                    mo->via.array.size = static_cast<uint32_t>(len);
+                    mo->via.map.size = len;
                     mo->via.map.ptr = kvs;
 
                     // push onto stack in reverse to be popped in order
