@@ -19,6 +19,8 @@ static bool v8function_to_string = false;
 static bool v8regexp_to_string = true;
 static bool v8object_call_to_json = true;
 
+static msgpack_sbuffer *unused_buffer = NULL;
+
 // An exception class that wraps a textual message
 struct MsgpackException {
     MsgpackException(const char *str) : msg(str) {}
@@ -103,8 +105,12 @@ msgpack_to_v8(msgpack_object *mo) {
 static void
 sbuffer_destroy_callback(char *data, void *hint) {
     assert(hint);
-    msgpack_sbuffer *sbuffer = (msgpack_sbuffer *)hint;
-    msgpack_sbuffer_free(sbuffer);
+    msgpack_sbuffer *sb = (msgpack_sbuffer *)hint;
+    if (unused_buffer) {
+        msgpack_sbuffer_free(sb);
+    } else {
+        unused_buffer = sb;
+    }
 }
 
 static inline int
@@ -378,7 +384,16 @@ NAN_METHOD(Pack) {
 
     // packing stuctures
     msgpack_packer pk;
-    msgpack_sbuffer *sb = msgpack_sbuffer_new();
+    msgpack_sbuffer *sb;
+
+    if (unused_buffer) {
+        sb = unused_buffer;
+        unused_buffer = NULL;
+        msgpack_sbuffer_init(sb);
+    } else {
+        sb = msgpack_sbuffer_new();
+    }
+
     int err = 0;
 
     if (!sb) {
@@ -392,6 +407,7 @@ NAN_METHOD(Pack) {
     for (int i = 0; i < args.Length(); i++) {
         err = msgpack_pack_object(&pk, root_mos[i]);
         if (err) {
+            unused_buffer = sb;
             msgpack_sbuffer_destroy(sb);
             msgpack_zone_destroy(&mz);
             return NanThrowError("alloc_error");
