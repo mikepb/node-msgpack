@@ -68,10 +68,10 @@
 		"lib": "lib"
 	},
 	"dependencies": {
-    "nan" : "~0.3.0"
+    "nan" : "~0.3.1"
 	},
   "optionalDependencies": {
-    "nodeunit": "https://github.com/godsflaw/nodeunit/tarball/master"
+    "nodeunit": "*"
   },
 	"engines": {
 		"node": ">=0.8.x"
