@@ -282,72 +282,72 @@ NAN_METHOD(Pack) {
         }
 
         // pack nil
-        else if (val->IsNull() || val->IsUndefined()) {
+        else if (val->IsNull() || val->IsUndefined() || val->IsExternal()) {
             mo->type = MSGPACK_OBJECT_NIL;
         }
 
-        // pack object
+        // pack date
+        else if (val->IsDate()) {
+            if (v8date_to_double) {
+                Local<Date> date = Local<Date>::Cast(val);
+                mo->type = MSGPACK_OBJECT_DOUBLE;
+                mo->via.dec = date->NumberValue();
+            } else {
+                err = pack_v8call(mo, &mz, val, to_iso_string_sym);
+            }
+        }
+
+        // pack function
+        else if (val->IsFunction()) {
+            if (v8function_to_string) {
+                err = pack_v8call(mo, &mz, val, to_string_sym);
+            } else {
+                mo->type = MSGPACK_OBJECT_NIL;
+            }
+        }
+
+        // pack buffer
+        else if (Buffer::HasInstance(val)) {
+            mo->type = MSGPACK_OBJECT_RAW;
+            mo->via.raw.size = static_cast<uint32_t>(Buffer::Length(val));
+            mo->via.raw.ptr = Buffer::Data(val);
+        }
+
+        // pack regexp
+        else if (val->IsRegExp()) {
+            if (v8regexp_to_string) {
+                err = pack_v8call(mo, &mz, val, to_string_sym);
+            } else {
+                mo->type = MSGPACK_OBJECT_NIL;
+            }
+        }
+
+        // pack object or array
         else if (val->IsObject()) {
+            Local<Object> o = val->ToObject();
 
-            // pack function
-            if (val->IsFunction()) {
-                if (v8function_to_string) {
-                    err = pack_v8call(mo, &mz, val, to_string_sym);
-                } else {
-                    mo->type = MSGPACK_OBJECT_NIL;
-                }
+            // recursion check
+            int id_hash = o->GetIdentityHash();
+            if (0 < id_hash_set.count(id_hash)) {
+                return NanThrowTypeError("circular_structure");
+            } else {
+                id_hash_set.insert(id_hash);
+                if (!val_stack.empty())
+                    val_stack.back().erase_id = id_hash;
             }
 
-            // pack regexp
-            else if (val->IsRegExp()) {
-                if (v8regexp_to_string) {
-                    err = pack_v8call(mo, &mz, val, to_string_sym);
-                } else {
-                    mo->type = MSGPACK_OBJECT_NIL;
-                }
-            }
+            // pack array
+            if (val->IsArray()) {
+                Local<Array> a = val->ToObject().As<Array>();
+                size_t len = a->Length();
 
-            // pack date
-            else if (val->IsDate()) {
-                if (v8date_to_double) {
-                    Local<Date> date = Local<Date>::Cast(val);
-                    mo->type = MSGPACK_OBJECT_DOUBLE;
-                    mo->via.dec = date->NumberValue();
-                } else {
-                    err = pack_v8call(mo, &mz, val, to_iso_string_sym);
-                }
-            }
+                mo->type = MSGPACK_OBJECT_ARRAY;
+                mo->via.array.size = len;
+                mo->via.array.ptr = NULL;
 
-            // pack buffer
-            else if (Buffer::HasInstance(val)) {
-                mo->type = MSGPACK_OBJECT_RAW;
-                mo->via.raw.size = static_cast<uint32_t>(Buffer::Length(val));
-                mo->via.raw.ptr = Buffer::Data(val);
-            }
-
-            // pack object or array
-            else {
-                Local<Object> o = val->ToObject();
-
-                // recursion check
-                int id_hash = o->GetIdentityHash();
-                if (0 < id_hash_set.count(id_hash)) {
-                    return NanThrowTypeError("circular_structure");
-                } else {
-                    id_hash_set.insert(id_hash);
-                    if (!val_stack.empty())
-                        val_stack.back().erase_id = id_hash;
-                }
-
-                // pack array
-                if (val->IsArray()) {
-                    Local<Array> a = val->ToObject().As<Array>();
-                    size_t len = a->Length();
+                if (0 < len) {
                     msgpack_object *mos = (msgpack_object *)
                         msgpack_zone_malloc(&mz, sizeof(msgpack_object) * len);
-
-                    mo->type = MSGPACK_OBJECT_ARRAY;
-                    mo->via.array.size = len;
                     mo->via.array.ptr = mos;
 
                     // push onto stack in reverse to be popped in order
@@ -355,14 +355,18 @@ NAN_METHOD(Pack) {
                     if (!err) for (uint32_t i = len; 0 < i--;) {
                         val_stack.push_back(packdat(a->Get(i), mos + i));
                     }
-                } else {
-                    Local<Array> a = o->GetOwnPropertyNames();
-                    size_t len = a->Length();
+                }
+            } else {
+                Local<Array> a = o->GetOwnPropertyNames();
+                size_t len = a->Length();
+
+                mo->type = MSGPACK_OBJECT_MAP;
+                mo->via.map.size = len;
+                mo->via.map.ptr = NULL;
+
+                if (0 < len) {
                     msgpack_object_kv *kvs = (msgpack_object_kv *)
                         msgpack_zone_malloc(&mz, sizeof(msgpack_object_kv) * len);
-
-                    mo->type = MSGPACK_OBJECT_MAP;
-                    mo->via.map.size = len;
                     mo->via.map.ptr = kvs;
 
                     // push onto stack in reverse to be popped in order
