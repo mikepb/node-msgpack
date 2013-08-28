@@ -1,5 +1,6 @@
 #include <assert.h>
 
+#include <tr1/array>
 #include <tr1/unordered_set>
 #include <vector>
 
@@ -19,7 +20,33 @@ static bool v8function_to_string = false;
 static bool v8regexp_to_string = true;
 static bool v8object_call_to_json = true;
 
-static msgpack_sbuffer *unused_buffer = NULL;
+// keep around 1MB of used buffers, assuming 8096-byte pages
+static std::tr1::array<msgpack_sbuffer *, 128> unused_buffers;
+uint unused_buffer_count = 0;
+
+static inline msgpack_sbuffer *sbuffer_factory() {
+    if (0 < unused_buffer_count) {
+        msgpack_sbuffer *sb = unused_buffers[--unused_buffer_count];
+        msgpack_sbuffer_init(sb);
+        return sb;
+    } else {
+        return msgpack_sbuffer_new();
+    }
+}
+
+static inline void sbuffer_factory_return(msgpack_sbuffer *sb) {
+    if (unused_buffer_count < unused_buffers.size()) {
+        unused_buffers[unused_buffer_count++] = sb;
+    } else {
+        msgpack_sbuffer_free(sb);
+    }
+}
+
+static void sbuffer_factory_callback(char *data, void *hint) {
+    assert(hint);
+    msgpack_sbuffer *sb = (msgpack_sbuffer *)hint;
+    sbuffer_factory_return(sb);
+}
 
 // An exception class that wraps a textual message
 struct MsgpackException {
@@ -98,18 +125,6 @@ msgpack_to_v8(msgpack_object *mo) {
 
     default:
         throw MsgpackException("Encountered unknown MesssagePack object type");
-    }
-}
-
-// This will be passed to Buffer::New so that we can manage our own memory.
-static void
-sbuffer_destroy_callback(char *data, void *hint) {
-    assert(hint);
-    msgpack_sbuffer *sb = (msgpack_sbuffer *)hint;
-    if (unused_buffer) {
-        msgpack_sbuffer_free(sb);
-    } else {
-        unused_buffer = sb;
     }
 }
 
@@ -384,15 +399,7 @@ NAN_METHOD(Pack) {
 
     // packing stuctures
     msgpack_packer pk;
-    msgpack_sbuffer *sb;
-
-    if (unused_buffer) {
-        sb = unused_buffer;
-        unused_buffer = NULL;
-        msgpack_sbuffer_init(sb);
-    } else {
-        sb = msgpack_sbuffer_new();
-    }
+    msgpack_sbuffer *sb = sbuffer_factory();
 
     int err = 0;
 
@@ -407,8 +414,7 @@ NAN_METHOD(Pack) {
     for (int i = 0; i < args.Length(); i++) {
         err = msgpack_pack_object(&pk, root_mos[i]);
         if (err) {
-            unused_buffer = sb;
-            msgpack_sbuffer_destroy(sb);
+            sbuffer_factory_return(sb);
             msgpack_zone_destroy(&mz);
             return NanThrowError("alloc_error");
         }
@@ -417,7 +423,7 @@ NAN_METHOD(Pack) {
     msgpack_zone_destroy(&mz);
 
     Local<Object> buf = NanNewBufferHandle(
-        sb->data, sb->size, sbuffer_destroy_callback, sb);
+        sb->data, sb->size, sbuffer_factory_callback, sb);
 
     NanReturnValue(buf);
 }
