@@ -1,7 +1,7 @@
 #include <assert.h>
 
-#include <stack>
 #include <tr1/unordered_set>
+#include <vector>
 
 #include <v8.h>
 #include <node.h>
@@ -194,12 +194,13 @@ NAN_METHOD(Pack) {
     if (!root_mos) return NanThrowError("alloc_error");
 
     // recursive
-    std::stack<packdat> val_stack;
     std::tr1::unordered_set<int> id_hash_set;
+    std::vector<packdat> val_stack;
 
     // add arguments to stack
+    val_stack.reserve(args.Length());
     for (int i = args.Length() - 1; 0 <= i; i--) {
-        val_stack.push(packdat(args[i], root_mos + i));
+        val_stack.push_back(packdat(args[i], root_mos + i));
     }
 
     // convert to msgpack
@@ -207,8 +208,8 @@ NAN_METHOD(Pack) {
         int err = 0;
 
         // pop val from stack
-        packdat dat = val_stack.top();
-        val_stack.pop();
+        packdat dat = val_stack.back();
+        val_stack.pop_back();
 
         // pop id hash
         if (dat.erase_id) id_hash_set.erase(dat.erase_id);
@@ -314,7 +315,7 @@ NAN_METHOD(Pack) {
                 } else {
                     id_hash_set.insert(id_hash);
                     if (!val_stack.empty())
-                        val_stack.top().erase_id = id_hash;
+                        val_stack.back().erase_id = id_hash;
                 }
 
                 // pack array
@@ -329,8 +330,9 @@ NAN_METHOD(Pack) {
                     mo->via.array.ptr = mos;
 
                     // push onto stack in reverse to be popped in order
-                    if (!err) for (uint32_t i = a->Length(); 0 < i--;) {
-                        val_stack.push(packdat(a->Get(i), mos + i));
+                    val_stack.reserve(val_stack.size() + len);
+                    if (!err) for (uint32_t i = len; 0 < i--;) {
+                        val_stack.push_back(packdat(a->Get(i), mos + i));
                     }
                 } else {
                     Local<Array> a = o->GetOwnPropertyNames();
@@ -347,14 +349,16 @@ NAN_METHOD(Pack) {
                         Local<Value> k = a->Get(i);
                         Local<Value> v = o->Get(k);
 
+                        val_stack.reserve(val_stack.size() + len * 2);
+
                         // skip function and/or regexp
                         if ((!v8function_to_string && v->IsFunction()) ||
                             (!v8regexp_to_string && v->IsRegExp())) {
                             mo->via.array.size--;
                         } else {
                             msgpack_object_kv *kv = kvs + i;
-                            val_stack.push(packdat(v, &kv->val));
-                            val_stack.push(packdat(k, &kv->key));
+                            val_stack.push_back(packdat(v, &kv->val));
+                            val_stack.push_back(packdat(k, &kv->key));
                         }
                     }
                 }
