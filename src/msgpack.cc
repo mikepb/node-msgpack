@@ -1,28 +1,23 @@
 #include <assert.h>
-#include <stdio.h>
 
 #include <set>
 #include <stack>
-
 
 #include <v8.h>
 #include <node.h>
 #include <node_buffer.h>
 #include <msgpack.h>
-#include <cmath>
-#include <iostream>
-#include <vector>
+
 #include "nan.h"
 
-using namespace std;
 using namespace v8;
 using namespace node;
 
 // global options
 static bool v8date_to_double = false;
 static bool v8function_to_string = false;
-static bool v8regexp_to_string = false;
-static bool v8object_call_to_json = false;
+static bool v8regexp_to_string = true;
+static bool v8object_call_to_json = true;
 
 // An exception class that wraps a textual message
 struct MsgpackException {
@@ -113,58 +108,42 @@ sbuffer_destroy_callback(char *data, void *hint) {
 }
 
 static inline int
-pack_v8string(msgpack_packer *pk, Local<Value> val) {
+pack_v8string(msgpack_object *mo, msgpack_zone *mz, Local<Value> val) {
     assert(val->IsString());
 
     Local<String> str = val->ToString();
     size_t len = str->Utf8Length();
+    char *buf = (char *)msgpack_zone_malloc(mz, len);
 
-    int err = msgpack_pack_raw(pk, len);
-    if (err) return err;
+    if (!buf) return -1;
 
-    //
-    // modified from msgpack sbuffer.h
-    //
+    mo->type = MSGPACK_OBJECT_RAW;
+    mo->via.raw.size = static_cast<uint32_t>(len);
+    mo->via.raw.ptr = buf;
 
-    msgpack_sbuffer *sb = (msgpack_sbuffer *)pk->data;
-
-    if (sb->alloc - sb->size < len) {
-        size_t nsize =
-            sb->alloc ? sb->alloc * 2 : MSGPACK_SBUFFER_INIT_SIZE;
-
-        while (nsize < sb->size + len) { nsize *= 2; }
-
-        void *tmp = realloc(sb->data, nsize);
-        if (!tmp) return -1;
-
-        sb->data = (char *)tmp;
-        sb->alloc = nsize;
-    }
-
-    size_t wlen = str->WriteUtf8(
-        sb->data + sb->size, sb->alloc, NULL, String::NO_NULL_TERMINATION);
-
-    assert(len == wlen);
-
-    sb->size += len;
+    NanFromV8String(val, Nan::UTF8, NULL, buf, len);
 
     return 0;
 }
 
 static inline int
-pack_v8call(msgpack_packer *pk, Local<Value> val, Local<String> sym) {
+pack_v8call(msgpack_object *mo, msgpack_zone *mz, Local<Value> val, Local<String> sym) {
     Local<Object> o = val->ToObject();
     assert(!o.IsEmpty());
     Local<Value> fn = o->Get(sym);
     assert(fn->IsFunction());
     Local<Value> str = fn.As<Function>()->Call(o, 0, NULL);
-    return pack_v8string(pk, str);
+    return pack_v8string(mo, mz, str);
 }
 
 struct packdat {
-    packdat(Local<Value> v) : val(v), popit(false) {}
-    packdat(bool p) : popit(p) {}
+    packdat(Local<Value> v, msgpack_object *o)
+        : val(v), mo(o), popit(false) {}
+    packdat(bool p)
+        : popit(p) {}
+
     Local<Value> val;
+    msgpack_object *mo;
     bool popit;
 };
 
@@ -204,25 +183,26 @@ NAN_METHOD(SetOptions) {
 NAN_METHOD(Pack) {
     NanScope();
 
-    msgpack_sbuffer *sb = msgpack_sbuffer_new();
-    static msgpack_packer *pk =
-        (msgpack_packer *)malloc(sizeof(msgpack_packer));
-
     Local<String> to_json_sym = NanSymbol("toJSON");
     Local<String> to_string_sym = NanSymbol("toString");
     Local<String> to_iso_string_sym = NanSymbol("toISOString");
 
-    if (!sb || !pk) return NanThrowError("alloc_error");
+    // msgpack intermediate structures
+    msgpack_zone mz;
+    if (!msgpack_zone_init(&mz, MSGPACK_ZONE_CHUNK_SIZE))
+        return NanThrowError("alloc_error");
+    msgpack_object *root_mos = (msgpack_object *)
+        msgpack_zone_malloc(&mz, sizeof(msgpack_object) * args.Length());
+    if (!root_mos) return NanThrowError("alloc_error");
 
-    msgpack_packer_init(pk, sb, msgpack_sbuffer_write);
-
-    std::set<int>   id_hash_set;
-    std::stack<int> id_hash_stack;
+    // recursive
+    std::set<int>       id_hash_set;
+    std::stack<int>     id_hash_stack;
     std::stack<packdat> val_stack;
 
     // add arguments to stack
     for (int i = args.Length() - 1; 0 <= i; i--) {
-        val_stack.push(args[i]);
+        val_stack.push(packdat(args[i], root_mos + i));
     }
 
     // convert to msgpack
@@ -242,6 +222,7 @@ NAN_METHOD(Pack) {
 
         // get local value
         Local<Value> val = dat.val;
+        msgpack_object *mo = dat.mo;
 
         // toJSON
         if (v8object_call_to_json && val->IsObject()) {
@@ -258,29 +239,36 @@ NAN_METHOD(Pack) {
 
         // pack string
         if (val->IsString() || val->IsStringObject()) {
-            err = pack_v8string(pk, val);
+            err = pack_v8string(mo, &mz, val);
+        }
+
+        // pack uint
+        else if (val->IsUint32()) {
+            mo->via.u64 = val->Uint32Value();
+            mo->type = MSGPACK_OBJECT_POSITIVE_INTEGER;
         }
 
         // pack int
         else if (val->IsInt32()) {
-            err = msgpack_pack_int(pk, val->Int32Value());
+            mo->via.i64 = val->IntegerValue();
+            mo->type = MSGPACK_OBJECT_NEGATIVE_INTEGER;
         }
 
-        // pack int
+        // pack decimal
         else if (val->IsNumber() || val->IsNumberObject()) {
-            err = msgpack_pack_double(pk, val->NumberValue());
+            mo->type = MSGPACK_OBJECT_DOUBLE;
+            mo->via.dec = val->NumberValue();
         }
 
         // pack boolean
         else if (val->IsBoolean() || val->IsBooleanObject()) {
-            err = val->BooleanValue()
-                ? msgpack_pack_true(pk)
-                : msgpack_pack_false(pk);
+            mo->type = MSGPACK_OBJECT_BOOLEAN;
+            mo->via.boolean = val->BooleanValue();
         }
 
         // pack nil
         else if (val->IsNull() || val->IsUndefined()) {
-            err = msgpack_pack_nil(pk);
+            mo->type = MSGPACK_OBJECT_NIL;
         }
 
         // pack object
@@ -289,18 +277,18 @@ NAN_METHOD(Pack) {
             // pack function
             if (val->IsFunction()) {
                 if (v8function_to_string) {
-                    err = pack_v8call(pk, val, to_string_sym);
+                    err = pack_v8call(mo, &mz, val, to_string_sym);
                 } else {
-                    err = msgpack_pack_nil(pk);
+                    mo->type = MSGPACK_OBJECT_NIL;
                 }
             }
 
             // pack regexp
             else if (val->IsRegExp()) {
                 if (v8regexp_to_string) {
-                    err = pack_v8call(pk, val, to_string_sym);
+                    err = pack_v8call(mo, &mz, val, to_string_sym);
                 } else {
-                    err = msgpack_pack_nil(pk);
+                    mo->type = MSGPACK_OBJECT_NIL;
                 }
             }
 
@@ -308,17 +296,18 @@ NAN_METHOD(Pack) {
             else if (val->IsDate()) {
                 if (v8date_to_double) {
                     Local<Date> date = Local<Date>::Cast(val);
-                    err = msgpack_pack_double(pk, date->NumberValue());
+                    mo->type = MSGPACK_OBJECT_DOUBLE;
+                    mo->via.dec = date->NumberValue();
                 } else {
-                    err = pack_v8call(pk, val, to_iso_string_sym);
+                    err = pack_v8call(mo, &mz, val, to_iso_string_sym);
                 }
             }
 
             // pack buffer
             else if (Buffer::HasInstance(val)) {
-                err = msgpack_pack_raw(pk, Buffer::Length(val));
-                if (!err) err = msgpack_pack_raw_body(
-                    pk, Buffer::Data(val), Buffer::Length(val));
+                mo->type = MSGPACK_OBJECT_RAW;
+                mo->via.raw.size = static_cast<uint32_t>(Buffer::Length(val));
+                mo->via.raw.ptr = Buffer::Data(val);
             }
 
             // pack object or array
@@ -328,7 +317,6 @@ NAN_METHOD(Pack) {
                 // recursion check
                 int id_hash = o->GetIdentityHash();
                 if (0 < id_hash_set.count(id_hash)) {
-                    msgpack_sbuffer_free(sb);
                     return NanThrowTypeError("circular_structure");
                 } else {
                     id_hash_set.insert(id_hash);
@@ -339,19 +327,27 @@ NAN_METHOD(Pack) {
                 // pack array
                 if (val->IsArray()) {
                     Local<Array> a = val->ToObject().As<Array>();
+                    size_t len = a->Length();
+                    msgpack_object *mos = (msgpack_object *)
+                        msgpack_zone_malloc(&mz, sizeof(msgpack_object) * len);
 
-                    err = msgpack_pack_array(pk, a->Length());
+                    mo->type = MSGPACK_OBJECT_ARRAY;
+                    mo->via.array.size = static_cast<uint32_t>(len);
+                    mo->via.array.ptr = mos;
 
                     // push onto stack in reverse to be popped in order
                     if (!err) for (uint32_t i = a->Length(); 0 < i--;) {
-                        val_stack.push(a->Get(i));
+                        val_stack.push(packdat(a->Get(i), mos + i));
                     }
-
-                    continue;
                 } else {
                     Local<Array> a = o->GetOwnPropertyNames();
+                    size_t len = a->Length();
+                    msgpack_object_kv *kvs = (msgpack_object_kv *)
+                        msgpack_zone_malloc(&mz, sizeof(msgpack_object_kv) * len);
 
-                    err = msgpack_pack_map(pk, a->Length());
+                    mo->type = MSGPACK_OBJECT_MAP;
+                    mo->via.array.size = static_cast<uint32_t>(len);
+                    mo->via.map.ptr = kvs;
 
                     // push onto stack in reverse to be popped in order
                     if (!err) for (uint32_t i = a->Length(); 0 < i--;) {
@@ -359,13 +355,13 @@ NAN_METHOD(Pack) {
                         Local<Value> v = o->Get(k);
 
                         // skip function and/or regexp
-                        if (!v8function_to_string && v->IsFunction()) {
-                            // no-op
-                        } else if (!v8regexp_to_string && v->IsRegExp()) {
-                            // no-op
+                        if ((!v8function_to_string && v->IsFunction()) ||
+                            (!v8regexp_to_string && v->IsRegExp())) {
+                            mo->via.array.size--;
                         } else {
-                            val_stack.push(v);
-                            val_stack.push(k);
+                            msgpack_object_kv *kv = kvs + i;
+                            val_stack.push(packdat(v, &kv->val));
+                            val_stack.push(packdat(k, &kv->key));
                         }
                     }
                 }
@@ -374,14 +370,38 @@ NAN_METHOD(Pack) {
 
         // default to null
         else {
-            err = msgpack_pack_nil(pk);
+            mo->type = MSGPACK_OBJECT_NIL;
         }
 
         if (err) {
-            msgpack_sbuffer_free(sb);
+            msgpack_zone_destroy(&mz);
             return NanThrowError("alloc_error");
         }
     }
+
+    // packing stuctures
+    msgpack_packer pk;
+    msgpack_sbuffer *sb = msgpack_sbuffer_new();
+    int err = 0;
+
+    if (!sb) {
+        msgpack_zone_destroy(&mz);
+        return NanThrowError("alloc_error");
+    }
+
+    msgpack_packer_init(&pk, sb, msgpack_sbuffer_write);
+
+    // packit
+    for (int i = 0; i < args.Length(); i++) {
+        err = msgpack_pack_object(&pk, root_mos[i]);
+        if (err) {
+            msgpack_sbuffer_destroy(sb);
+            msgpack_zone_destroy(&mz);
+            return NanThrowError("alloc_error");
+        }
+    }
+
+    msgpack_zone_destroy(&mz);
 
     Local<Object> buf = NanNewBufferHandle(
         sb->data, sb->size, sbuffer_destroy_callback, sb);
@@ -394,7 +414,6 @@ NAN_METHOD(Pack) {
 // Return the JavaScript object resulting from unpacking the contents of the
 // specified buffer. If the buffer does not contain a complete object, the
 // undefined value is returned.
-Persistent<Object> persistentExports;
 NAN_METHOD(Unpack) {
     NanScope();
 
@@ -409,14 +428,10 @@ NAN_METHOD(Unpack) {
     size_t off = 0;
 
     switch (msgpack_unpack(Buffer::Data(buf), Buffer::Length(buf), &off, &mz._mz, &mo)) {
-    case MSGPACK_UNPACK_EXTRA_BYTES: {
-        Local<Object> exports =
-            NanPersistentToLocal(persistentExports);
-        exports->Set(NanSymbol("offset"),
-            Integer::New(static_cast<int32_t>(off))
-        );
-    }
+    case MSGPACK_UNPACK_EXTRA_BYTES:
     case MSGPACK_UNPACK_SUCCESS:
+        buf->Set(NanSymbol("offset"), Integer::New(off));
+
         try {
             NanReturnValue(msgpack_to_v8(&mo));
         } catch (MsgpackException e) {
@@ -435,8 +450,6 @@ NAN_METHOD(Unpack) {
 
 extern "C" void
 init(Handle<Object> exports) {
-    // Save `exports` so that we can set `offset`.
-    NanAssignPersistent(Object, persistentExports, exports);
     // exports.pack
     exports->Set(NanSymbol("pack"),
         FunctionTemplate::New(Pack)->GetFunction());
