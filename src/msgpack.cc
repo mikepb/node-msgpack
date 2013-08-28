@@ -18,6 +18,12 @@ using namespace std;
 using namespace v8;
 using namespace node;
 
+// global options
+static bool v8date_to_double = false;
+static bool v8function_to_string = false;
+static bool v8regexp_to_string = false;
+static bool v8object_call_to_json = false;
+
 // An exception class that wraps a textual message
 struct MsgpackException {
     MsgpackException(const char *str) : msg(str) {}
@@ -106,7 +112,7 @@ sbuffer_destroy_callback(char *data, void *hint) {
     msgpack_sbuffer_free(sbuffer);
 }
 
-static inline void
+static inline int
 pack_v8string(msgpack_packer *pk, Local<Value> val) {
     assert(val->IsString());
 
@@ -114,7 +120,7 @@ pack_v8string(msgpack_packer *pk, Local<Value> val) {
     size_t len = str->Utf8Length();
 
     int err = msgpack_pack_raw(pk, len);
-    assert(!err);
+    if (err) return err;
 
     //
     // modified from msgpack sbuffer.h
@@ -129,7 +135,7 @@ pack_v8string(msgpack_packer *pk, Local<Value> val) {
         while (nsize < sb->size + len) { nsize *= 2; }
 
         void *tmp = realloc(sb->data, nsize);
-        assert(tmp);
+        if (!tmp) return -1;
 
         sb->data = (char *)tmp;
         sb->alloc = nsize;
@@ -141,16 +147,18 @@ pack_v8string(msgpack_packer *pk, Local<Value> val) {
     assert(len == wlen);
 
     sb->size += len;
+
+    return 0;
 }
 
-static inline void
-pack_v8call(msgpack_packer *pk, Local<Value> val, const char *sym) {
+static inline int
+pack_v8call(msgpack_packer *pk, Local<Value> val, Local<String> sym) {
     Local<Object> o = val->ToObject();
     assert(!o.IsEmpty());
-    Local<Value> fn = o->Get(NanSymbol("toString"));
+    Local<Value> fn = o->Get(sym);
     assert(fn->IsFunction());
     Local<Value> str = fn.As<Function>()->Call(o, 0, NULL);
-    pack_v8string(pk, str);
+    return pack_v8string(pk, str);
 }
 
 struct packdat {
@@ -159,6 +167,31 @@ struct packdat {
     Local<Value> val;
     bool popit;
 };
+
+NAN_METHOD(SetOptions) {
+    NanScope();
+
+    assert(args.Length() == 1);
+
+    Local<String> date_to_num_sym = NanSymbol("dateToNum");
+    Local<String> fn_to_string_sym = NanSymbol("fnToString");
+    Local<String> re_to_string_sym = NanSymbol("reToString");
+    Local<String> to_json_sym = NanSymbol("toJSON");
+
+    // options
+    Local<Object> options;
+    if (args[0]->IsObject()) options = args[0]->ToObject();
+    if (options->Has(date_to_num_sym))
+        v8date_to_double = options->Get(date_to_num_sym)->BooleanValue();
+    if (options->Has(fn_to_string_sym))
+        v8function_to_string = options->Get(fn_to_string_sym)->BooleanValue();
+    if (options->Has(re_to_string_sym))
+        v8regexp_to_string = options->Get(re_to_string_sym)->BooleanValue();
+    if (options->Has(to_json_sym))
+        v8object_call_to_json = options->Get(to_json_sym)->BooleanValue();
+
+    NanReturnUndefined();
+}
 
 // var buf = msgpack.pack(obj[, obj ...]);
 //
@@ -172,35 +205,23 @@ NAN_METHOD(Pack) {
     NanScope();
 
     msgpack_sbuffer *sb = msgpack_sbuffer_new();
-    assert(sb);
-    msgpack_packer   packer;
-    msgpack_packer  *pk = &packer;
+    static msgpack_packer *pk =
+        (msgpack_packer *)malloc(sizeof(msgpack_packer));
+
+    Local<String> to_json_sym = NanSymbol("toJSON");
+    Local<String> to_string_sym = NanSymbol("toString");
+    Local<String> to_iso_string_sym = NanSymbol("toISOString");
+
+    if (!sb || !pk) return NanThrowError("alloc_error");
+
     msgpack_packer_init(pk, sb, msgpack_sbuffer_write);
 
     std::set<int>   id_hash_set;
     std::stack<int> id_hash_stack;
     std::stack<packdat> val_stack;
 
-    assert(1 < args.Length());
-
-    // options
-    Local<Object> options;
-    if (args[0]->IsObject()) options = args[0]->ToObject();
-    // options.dateToNumber
-    bool dateToNumber = NanBooleanOptionValue(
-        options, NanSymbol("dateToNumber"), false);
-    // options.functionToString
-    bool functionToString = NanBooleanOptionValue(
-        options, NanSymbol("functionToString"), true);
-    // options.regexpToString
-    bool regexpToString = NanBooleanOptionValue(
-        options, NanSymbol("regexpToString"), true);
-    // options.callToJSON
-    bool callToJSON = NanBooleanOptionValue(
-        options, NanSymbol("callToJSON"), true);
-
     // add arguments to stack
-    for (int i = args.Length() - 1; 0 < i; i--) {
+    for (int i = args.Length() - 1; 0 <= i; i--) {
         val_stack.push(args[i]);
     }
 
@@ -223,10 +244,10 @@ NAN_METHOD(Pack) {
         Local<Value> val = dat.val;
 
         // toJSON
-        if (callToJSON && val->IsObject()) {
+        if (v8object_call_to_json && val->IsObject()) {
             Local<Object> o = val->ToObject();
-            if (o->Has(NanSymbol("toJSON"))) {
-                Local<Value> fn = o->Get(NanSymbol("toJSON"));
+            if (o->Has(to_json_sym)) {
+                Local<Value> fn = o->Get(to_json_sym);
                 if (fn->IsFunction()) {
                     val = fn.As<Function>()->Call(o, 0, NULL);
                 }
@@ -237,19 +258,17 @@ NAN_METHOD(Pack) {
 
         // pack string
         if (val->IsString() || val->IsStringObject()) {
-            pack_v8string(pk, val);
+            err = pack_v8string(pk, val);
         }
 
         // pack int
         else if (val->IsInt32()) {
             err = msgpack_pack_int(pk, val->Int32Value());
-            assert(!err);
         }
 
         // pack int
         else if (val->IsNumber() || val->IsNumberObject()) {
             err = msgpack_pack_double(pk, val->NumberValue());
-            assert(!err);
         }
 
         // pack boolean
@@ -257,13 +276,11 @@ NAN_METHOD(Pack) {
             err = val->BooleanValue()
                 ? msgpack_pack_true(pk)
                 : msgpack_pack_false(pk);
-            assert(!err);
         }
 
         // pack nil
         else if (val->IsNull() || val->IsUndefined()) {
             err = msgpack_pack_nil(pk);
-            assert(!err);
         }
 
         // pack object
@@ -271,42 +288,37 @@ NAN_METHOD(Pack) {
 
             // pack function
             if (val->IsFunction()) {
-                if (functionToString) {
-                    pack_v8call(pk, val, "toString");
+                if (v8function_to_string) {
+                    err = pack_v8call(pk, val, to_string_sym);
                 } else {
                     err = msgpack_pack_nil(pk);
-                    assert(!err);
                 }
             }
 
             // pack regexp
             else if (val->IsRegExp()) {
-                if (regexpToString) {
-                    pack_v8call(pk, val, "toString");
+                if (v8regexp_to_string) {
+                    err = pack_v8call(pk, val, to_string_sym);
                 } else {
                     err = msgpack_pack_nil(pk);
-                    assert(!err);
                 }
             }
 
             // pack date
             else if (val->IsDate()) {
-                if (dateToNumber) {
+                if (v8date_to_double) {
                     Local<Date> date = Local<Date>::Cast(val);
                     err = msgpack_pack_double(pk, date->NumberValue());
-                    assert(!err);
                 } else {
-                    pack_v8call(pk, val, "toISOString");
+                    err = pack_v8call(pk, val, to_iso_string_sym);
                 }
             }
 
             // pack buffer
             else if (Buffer::HasInstance(val)) {
                 err = msgpack_pack_raw(pk, Buffer::Length(val));
-                assert(!err);
-                err = msgpack_pack_raw_body(
+                if (!err) err = msgpack_pack_raw_body(
                     pk, Buffer::Data(val), Buffer::Length(val));
-                assert(!err);
             }
 
             // pack object or array
@@ -328,11 +340,10 @@ NAN_METHOD(Pack) {
                 if (val->IsArray()) {
                     Local<Array> a = val->ToObject().As<Array>();
 
-                    int err = msgpack_pack_array(pk, a->Length());
-                    assert(!err);
+                    err = msgpack_pack_array(pk, a->Length());
 
                     // push onto stack in reverse to be popped in order
-                    for (uint32_t i = a->Length(); 0 < i--;) {
+                    if (!err) for (uint32_t i = a->Length(); 0 < i--;) {
                         val_stack.push(a->Get(i));
                     }
 
@@ -341,17 +352,16 @@ NAN_METHOD(Pack) {
                     Local<Array> a = o->GetOwnPropertyNames();
 
                     err = msgpack_pack_map(pk, a->Length());
-                    assert(!err);
 
                     // push onto stack in reverse to be popped in order
-                    for (uint32_t i = a->Length(); 0 < i--;) {
+                    if (!err) for (uint32_t i = a->Length(); 0 < i--;) {
                         Local<Value> k = a->Get(i);
                         Local<Value> v = o->Get(k);
 
                         // skip function and/or regexp
-                        if (!functionToString && v->IsFunction()) {
+                        if (!v8function_to_string && v->IsFunction()) {
                             // no-op
-                        } else if (!regexpToString && v->IsRegExp()) {
+                        } else if (!v8regexp_to_string && v->IsRegExp()) {
                             // no-op
                         } else {
                             val_stack.push(v);
@@ -365,7 +375,11 @@ NAN_METHOD(Pack) {
         // default to null
         else {
             err = msgpack_pack_nil(pk);
-            assert(!err);
+        }
+
+        if (err) {
+            msgpack_sbuffer_free(sb);
+            return NanThrowError("alloc_error");
         }
     }
 
@@ -429,6 +443,9 @@ init(Handle<Object> exports) {
     // exports.unpack
     exports->Set(NanSymbol("unpack"),
         FunctionTemplate::New(Unpack)->GetFunction());
+    // exports.setOptions
+    exports->Set(NanSymbol("setOptions"),
+        FunctionTemplate::New(SetOptions)->GetFunction());
 }
 
 NODE_MODULE(msgpackBinding, init);
