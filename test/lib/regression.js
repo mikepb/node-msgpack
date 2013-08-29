@@ -1,6 +1,6 @@
 var fs      = require('fs'),
-    msgpack = require("../lib/msgpack"),
-    stub    = require("./fixtures/stub");
+    msgpack = require("../../lib/msgpack"),
+    stub    = require("../fixtures/stub");
 
 function _set_up(callback) {
   this.backup = {};
