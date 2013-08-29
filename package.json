@@ -62,7 +62,7 @@
 	},
 	"main": "./lib/msgpack",
 	"scripts": {
-		"test": "./run_tests"
+		"test": "mocha --compilers coffee:coffee-script test/msgpack-test.coffee && ./run_tests"
 	},
 	"directories": {
 		"lib": "lib"
@@ -72,6 +72,11 @@
 	},
   "optionalDependencies": {
     "nodeunit": "*"
+  },
+  "devDependencies": {
+  	"coffee-script": "*",
+    "expect.js": "*",
+    "mocha": "*"
   },
 	"engines": {
 		"node": ">=0.8.x"

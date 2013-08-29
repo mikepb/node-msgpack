@@ -19,5 +19,5 @@ process.chdir(__dirname);
 if (process.argv[2]) {
   reporter.run(process.argv.slice(2, process.argv.length));
 } else {
-  reporter.run(['test', 'test/lib']);
+  reporter.run(['test/lib']);
 }

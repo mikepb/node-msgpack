@@ -3,6 +3,11 @@ var fs      = require('fs'),
     msgpack = require("../../lib/msgpack"),
     stub    = require("../fixtures/stub");
 
+msgpack.setOptions({
+  reToString: false,
+  toJSON: false
+});
+
 var DATA_TEMPLATE = {'abcdef' : 1, 'qqq' : 13, '19' : [1, 2, 3, 4]};
 var DATA = [];
 
@@ -147,16 +152,16 @@ exports.benchmark = {
       var now = Date.now();
       mpBuf = msgpack.pack(DATA);
       console.log('msgpack pack:   ' + (Date.now() - now) + ' ms');
-    
+
       now = Date.now();
       msgpack.unpack(mpBuf);
       console.log('msgpack unpack: ' + (Date.now() - now) + ' ms');
-    
+
       var jsonStr;
       now = Date.now();
       jsonStr = JSON.stringify(DATA);
       console.log('json    pack:   ' + (Date.now() - now) + ' ms');
-    
+
       now = Date.now();
       JSON.parse(jsonStr);
       console.log('json    unpack: ' + (Date.now() - now) + ' ms');
@@ -176,20 +181,20 @@ exports.benchmark = {
         mpBuf = msgpack.pack(d);
       });
       console.log('msgpack pack:   ' + (Date.now() - now) + ' ms');
-    
+
       now = Date.now();
       DATA.forEach(function(d) {
         msgpack.unpack(mpBuf);
       });
       console.log('msgpack unpack: ' + (Date.now() - now) + ' ms');
-    
+
       var jsonStr;
       now = Date.now();
       DATA.forEach(function(d) {
         jsonStr = JSON.stringify(d);
       });
       console.log('json    pack:   ' + (Date.now() - now) + ' ms');
-    
+
       now = Date.now();
       DATA.forEach(function(d) {
         JSON.parse(jsonStr);
