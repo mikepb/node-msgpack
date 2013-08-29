@@ -1,7 +1,7 @@
 {
 	"name": "msgpack",
 	"description": "A space-efficient object serialization library for node.js",
-	"version": "0.2.0",
+	"version": "0.2.1",
 	"homepage": "https://github.com/msgpack/msgpack-node",
 	"contributors": [
 		{
@@ -61,22 +61,17 @@
 		"url": "https://github.com/msgpack/msgpack-node.git"
 	},
 	"main": "./lib/msgpack",
-	"scripts": {
-		"test": "mocha --compilers coffee:coffee-script test/msgpack-test.coffee && ./run_tests"
-	},
 	"directories": {
 		"lib": "lib"
 	},
 	"dependencies": {
     "nan" : "~0.3.1"
 	},
-  "optionalDependencies": {
-    "nodeunit": "*"
-  },
   "devDependencies": {
   	"coffee-script": "*",
     "expect.js": "*",
-    "mocha": "*"
+    "mocha": "*",
+    "nodeunit": "*"
   },
 	"engines": {
 		"node": ">=0.8.x"
@@ -84,5 +79,8 @@
 	"bin": {
 		"json2msgpack": "./bin/json2msgpack",
 		"msgpack2json": "./bin/msgpack2json"
+	},
+	"scripts": {
+		"test": "mocha --compilers coffee:coffee-script test/msgpack-test.coffee && ./run_tests"
 	}
 }
