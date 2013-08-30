@@ -119,7 +119,7 @@ describe "binding", ->
       expect(unpack [i]).to.be -((~i & 0xff) + 1) for i in [0xe0..0xff]
       expect(unpack [0xff]).to.be -1
 
-    it "should unpack uint 8", ->
+    it "should unpack int 8", ->
       @slow 100
       expect(unpack [0xd0, i]).to.be i for i in [0..0x0f]
       expect(unpack [0xd0, i]).to.be i for i in [0x10..0x7f] by 7
@@ -128,7 +128,7 @@ describe "binding", ->
       expect(unpack [0xd0, i]).to.be -((~i & 0xff) + 1) for i in [0x90..0xff] by 7
       expect(unpack [0xd0, 0xff]).to.be -1
 
-    it "should unpack uint 16", ->
+    it "should unpack int 16", ->
       @slow 200
       expect(unpack [0xd1, 0, i]).to.be i for i in [0..0xf]
       expect(unpack [0xd1, 0, i]).to.be i for i in [0x10..0xff] by 11
@@ -141,7 +141,7 @@ describe "binding", ->
       expect(unpack [0xd1, 0xff, i]).to.be -((~i & 0xff) + 1) for i in [0xf0..0xff]
       expect(unpack [0xd1, 0xff, 0xff]).to.be -1
 
-    it "should unpack uint 32", ->
+    it "should unpack int 32", ->
       @slow 200
       expect(unpack [0xd2, 0, 0, 0, i]).to.be i for i in [0..0x08]
       expect(unpack [0xd2, 0, 0, 0, i]).to.be i for i in [0x09..0xff] by 17
@@ -159,7 +159,7 @@ describe "binding", ->
       expect(unpack [0xd2, 0xff, 0, 0, 0xff]).to.be -0xffff01
       expect(unpack [0xd2, 0xff, 0xff, 0xff, 0xff]).to.be -1
 
-    it "should unpack uint 64", ->
+    it "should unpack int 64", ->
       @slow 200
       expect(unpack [0xd3, 0, 0, 0, 0, 0, 0, 0, 0]).to.be 0
       expect(unpack [0xd3, 0, 0, 0, 0, 0x80, 0, 0, 0]).to.be 0x80000000

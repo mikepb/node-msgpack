@@ -215,72 +215,141 @@ union msgpack_part_union {
   double   d64;
 };
 
+struct msgpack_part {
+
+  inline uint8_t type() const { return type_.u; }
+
+  template <uint8_t Mask>
+  inline uint8_t fix() const {
+    return type_.u & Mask;
+  };
+  inline int8_t fix() const {
+    return type_.i;
+  };
+
+  template <typename T, uint8_t Mask>
+  inline T value() const;
+  template <typename T>
+  inline T value() const;
+
+  inline const msgpack_part_union &as() const {
+    return *(msgpack_part_union *)(((char *)this) + 1);
+  };
+
+  const union {
+    uint8_t u;
+     int8_t i;
+  } type_;
+};
+
+template <>
+inline uint8_t msgpack_part::fix<0xff>() const {
+  return type_.u;
+}
+
+template<>
+inline uint8_t msgpack_part::value() const {
+  return as().u8;
+}
+
+template<>
+inline uint16_t msgpack_part::value() const {
+  return be16toh(as().u16);
+}
+
+template<>
+inline uint32_t msgpack_part::value() const {
+  return be32toh(as().u32);
+}
+
+template<>
+inline uint64_t msgpack_part::value() const {
+  return be64toh(as().u64);
+}
+
+template<>
+inline int8_t msgpack_part::value() const {
+  return as().i8;
+}
+
+template<>
+inline int16_t msgpack_part::value() const {
+  return value<uint16_t>();
+}
+
+template<>
+inline int32_t msgpack_part::value() const {
+  return value<uint32_t>();
+}
+
+template<>
+inline int64_t msgpack_part::value() const {
+  return value<uint64_t>();
+}
+
+template<>
+inline float msgpack_part::value() const {
+  uint32_t i = value<uint32_t>();
+  return reinterpret_cast<float &>(i);
+}
+
+template<>
+inline double msgpack_part::value() const {
+  uint64_t i = value<uint64_t>();
+  return reinterpret_cast<double &>(i);
+}
+
 class msgpack_part_reader {
 public:
-  msgpack_part_reader(char **ptr, char *end)
-  : ptr_(ptr), end_(end), ref_(NULL), len_(0) {
-  }
-
-  inline bool empty() const {
-    return end_ <= *ptr_;
+  msgpack_part_reader(char *head, size_t size)
+  : part_(NULL), head_(head), size_(size), offset_(0) {
   }
 
   inline bool next() {
-    bool not_empty = !empty();
-    if (not_empty) {
-      type_ = reinterpret_cast<msgpack_part_union *>(*ptr_); ptr_[0]++;
-      data_ = reinterpret_cast<msgpack_part_union *>(*ptr_);
-    }
-    return not_empty;
+    if      (size_ <  offset_) throw bad_data();
+    else if (size_ == offset_) return false;
+    part_ = reinterpret_cast<msgpack_part *>(const_cast<char *>(head_) + offset_);
+    offset_ += sizeof(part_->type_);
+    return true;
   }
-
-private:
-  inline void inc(size_t b) {
-    *ptr_ += b; if (end_ < *ptr_) throw bad_data();
-  }
-
-  inline uint16_t ntou(const uint16_t i) { return ntohs(i); }
-  inline uint32_t ntou(const uint32_t i) { return ntohl(i); }
-  inline uint64_t ntou(const uint64_t i) { return be64toh(i); }
-  inline  int16_t ntoi(const uint16_t i) { return ntou(i); }
-  inline  int32_t ntoi(const uint32_t i) { return ntou(i); }
-  inline  int64_t ntoi(const uint64_t i) { return ntou(i); }
-  inline    float ntof(uint32_t i) { i = ntou(i); return reinterpret_cast<float &>(i); }
-  inline   double ntod(uint64_t i) { i = ntou(i); return reinterpret_cast<double &>(i); }
 
 public:
+  inline uint8_t type() const { return part_->type(); }
+
   template <uint8_t Mask>
-  inline  uint8_t  ut() const   { return type_->u8 & Mask; }
-  inline  uint8_t  ut() const   { return type_->u8; }
-  inline   int8_t  it() const   { return type_->i8; }
-  inline  uint8_t  u8() { inc(1); return data_->u8; }
-  inline uint16_t u16() { inc(2); return ntou(data_->u16); }
-  inline uint32_t u32() { inc(4); return ntou(data_->u32); }
-  inline uint64_t u64() { inc(8); return ntou(data_->u64); }
-  inline   int8_t  i8() const   { return data_->i8; }
-  inline  int16_t i16() { inc(2); return ntoi(data_->u16); }
-  inline  int32_t i32() { inc(4); return ntoi(data_->u32); }
-  inline  int64_t i64() { inc(8); return ntoi(data_->u64); }
-  inline    float d32() { inc(4); return ntof(data_->u32); }
-  inline   double d64() { inc(8); return ntod(data_->u64); }
+  inline uint8_t fix() const { return part_->fix<Mask>(); }
+  inline int8_t fix() const { return part_->fix(); }
 
-  inline char   *c() { len_ = ut<0x1f>();       ref_ = *ptr_;     inc(len_);     return ref_; }
-  inline char  *c8() { len_ = data_->u8;        ref_ = *ptr_ + 1; inc(len_ + 1); return ref_; }
-  inline char *c16() { len_ = ntou(data_->u16); ref_ = *ptr_ + 2; inc(len_ + 2); return ref_; }
-  inline char *c32() { len_ = ntou(data_->u32); ref_ = *ptr_ + 4; inc(len_ + 4); return ref_; }
+  template <typename T>
+  inline T value() { offset_ += sizeof(T); return part_->value<T>(); }
+
+  template <typename T>
+  inline const char *data() {
+    length_ = value<T>();
+    const char *p = head_ + offset_;
+    offset_ += length_;
+    return p;
+  }
+
+  template <uint8_t Mask>
+  inline const char *data() {
+    length_ = fix<Mask>();
+    const char *p = head_ + offset_;
+    offset_ += length_;
+    return p;
+  }
 
 public:
-  inline char  *data()  const { return ref_; }
-  inline size_t size()  const { return len_; }
-  inline size_t bytes() const { return end_ - *ptr_; }
+  inline size_t   size() const { return size_; }
+  inline size_t offset() const { return offset_; }
+  inline size_t length() const { return length_; }
 
 private:
-  msgpack_part_union *type_;
-  msgpack_part_union *data_;
-  char **ptr_;
-  char  *end_;
-  char  *ref_;
-  size_t len_;
+  msgpack_part *part_;
+  const char  *head_;
+  const size_t size_;
+  size_t length_;
+  size_t offset_;
 };
 
 struct unpak {
@@ -318,10 +387,7 @@ inline Local<Value> MessagePack::Unpack(Local<Value> val) {
   size_t len = Buffer::Length(buf);
   if (len == 0) return Local<Value>::New(Undefined());
 
-  char *data = Buffer::Data(buf);
-  char *tail = data + len;
-
-  msgpack_part_reader r(&data, tail);
+  msgpack_part_reader r(Buffer::Data(buf), len);
   std::stack<unpak> stack;
   Local<Value> result;
 
@@ -329,7 +395,7 @@ inline Local<Value> MessagePack::Unpack(Local<Value> val) {
     Local<Value> v;
     uint32_t l = 0;
 
-    switch (r.ut()) {
+    switch (r.type()) {
       case 0xc0: // nil
         v = Local<Value>::New(Null());
         break;
@@ -343,96 +409,96 @@ inline Local<Value> MessagePack::Unpack(Local<Value> val) {
         break;
 
       case 0xca: // float 32
-        v = Number::New(r.d32());
+        v = Number::New(r.value<float>());
         break;
 
       case 0xcb: // float 64
-        v = Number::New(r.d64());
+        v = Number::New(r.value<double>());
         break;
 
       case 0x00 ... 0x7f: // positive fixint
-        v = Integer::NewFromUnsigned(r.ut());
+        v = Integer::New(r.fix<0xff>());
         break;
 
       case 0xcc: // uint 8
-        v = Integer::NewFromUnsigned(r.u8());
+        v = Integer::NewFromUnsigned(r.value<uint8_t>());
         break;
 
       case 0xcd: // uint 16
-        v = Integer::NewFromUnsigned(r.u16());
+        v = Integer::NewFromUnsigned(r.value<uint16_t>());
         break;
 
       case 0xce: // uint 32
-        v = Integer::NewFromUnsigned(r.u32());
+        v = Integer::NewFromUnsigned(r.value<uint32_t>());
         break;
 
       case 0xcf: // uint 64
-        v = Number::New(r.u64());
+        v = Number::New(r.value<uint64_t>());
         break;
 
       case 0xe0 ... 0xff: // negative fixint
-        v = Integer::New(r.it());
+        v = Integer::New(r.fix());
         break;
 
       case 0xd0: // int 8
-        v = Integer::New(r.i8());
+        v = Integer::New(r.value<int8_t>());
         break;
 
       case 0xd1: // int 16
-        v = Integer::New(r.i16());
+        v = Integer::New(r.value<int16_t>());
         break;
 
       case 0xd2: // int 32
-        v = Integer::New(r.i32());
+        v = Integer::New(r.value<int32_t>());
         break;
 
       case 0xd3: // int 64
-        v = Number::New(r.i64());
+        v = Number::New(r.value<int64_t>());
         break;
 
       case 0xa0 ... 0xbf: // fixstr
-        v = String::New(r.c(), r.size());
+        v = String::New(r.data<0x1f>(), r.length());
         break;
 
       case 0xd9: // str 8
-        v = String::New(r.c8(), r.size());
+        v = String::New(r.data<uint8_t>(), r.length());
         break;
 
       case 0xda: // str 16
-        v = String::New(r.c16(), r.size());
+        v = String::New(r.data<uint16_t>(), r.length());
         break;
 
       case 0xdb: // str 32
-        v = String::New(r.c32(), r.size());
+        v = String::New(r.data<uint32_t>(), r.length());
         break;
 
       case 0x90 ... 0x9f: // fixarray
-        l = r.ut<0x0f>();
+        l = r.fix<0x0f>();
         v = Array::New(l);
         break;
 
       case 0xdc: // array 16
-        l = r.u16();
+        l = r.value<uint16_t>();
         v = Array::New(l);
         break;
 
       case 0xdd: // array 32
-        l = r.u32();
+        l = r.value<uint32_t>();
         v = Array::New(l);
         break;
 
       case 0x80 ... 0x8f: // fixmap
-        l = r.ut<0x0f>();
+        l = r.fix<0x0f>();
         v = Object::New();
         break;
 
       case 0xde: // map 16
-        l = r.u16();
+        l = r.value<uint16_t>();
         v = Object::New();
         break;
 
       case 0xdf: // map 32
-        l = r.u32();
+        l = r.value<uint32_t>();
         v = Object::New();
         break;
 
@@ -494,7 +560,7 @@ inline Local<Value> MessagePack::Unpack(Local<Value> val) {
   if (!stack.empty()) result = stack.top().v;
   assert(!result.IsEmpty());
 
-  buf->Set(NanSymbol("offset"), Integer::New(len - (tail - data)));
+  buf->Set(NanSymbol("offset"), Integer::New(r.offset()));
 
   return result;
 }
