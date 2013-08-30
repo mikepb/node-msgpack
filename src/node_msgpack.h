@@ -234,8 +234,8 @@ private:
   inline  int16_t ntoi(const uint16_t i) { return ntou(i); }
   inline  int32_t ntoi(const uint32_t i) { return ntou(i); }
   inline  int64_t ntoi(const uint64_t i) { return ntou(i); }
-  inline    float ntof(const uint32_t i) { return ntou(i); }
-  inline   double ntod(const uint64_t i) { return ntou(i); }
+  inline    float ntof(const uint32_t i) { ntou(i); return as.d32; }
+  inline   double ntod(const uint64_t i) { ntou(i); return as.d64; }
 
 public:
   inline  uint8_t  ut(const uint8_t mask = 0xff) { return type_->u8 & mask; }
@@ -331,7 +331,7 @@ inline Local<Value> MessagePack::Unpack(Local<Value> val) {
         break;
 
       case 0xca: // float 32
-        v = Number::New((double)r.d32());
+        v = Number::New(r.d32());
         break;
 
       case 0xcb: // float 64
