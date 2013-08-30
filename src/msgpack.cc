@@ -103,7 +103,7 @@ NAN_METHOD(Unpack) {
     Unpacker unpacker(Buffer::Data(buf), len);
 
     try {
-        len = unpacker.unpack(result);
+        len = unpacker.Unpack(result);
     } catch (msgpack_error &e) {
         return NanThrowError(e.what());
     }

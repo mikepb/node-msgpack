@@ -25,19 +25,6 @@ public:
   : head_(head), size_(size), length_(0), offset_(0) {}
 
 private:
-  union as_union {
-    uint8_t  u8;
-    uint16_t u16;
-    uint32_t u32;
-    uint64_t u64;
-    int8_t   i8;
-    int16_t  i16;
-    int32_t  i32;
-    int64_t  i64;
-    float    d32;
-    double   d64;
-  };
-
   struct part {
     inline uint8_t type() const {
       return type_;
@@ -56,8 +43,9 @@ private:
     template <typename T>
     inline T value() const;
 
-    inline const as_union &as() const {
-      return *reinterpret_cast<const as_union *>(
+    template <typename T>
+    inline const T as() const {
+      return *reinterpret_cast<const T *>(
         (reinterpret_cast<const char *>(this)) + 1
       );
     };
@@ -129,7 +117,7 @@ private:
   }
 
 public:
-  inline size_t unpack(Local<Value> &result) {
+  inline size_t Unpack(Local<Value> &result) {
     std::stack<stack_part> stack;
 
     while (next()) {
@@ -271,15 +259,22 @@ private:
   size_t offset_;
 };
 
-template<> inline  uint8_t Unpacker::part::fix<0xff>() const { return type_; }
-template<> inline  uint8_t Unpacker::part::value() const { return as().u8; }
-template<> inline uint16_t Unpacker::part::value() const { return ntohs(as().u16); }
-template<> inline uint32_t Unpacker::part::value() const { return ntohl(as().u32); }
-template<> inline uint64_t Unpacker::part::value() const { return be64toh(as().u64); }
-template<> inline   int8_t Unpacker::part::value() const { return as().i8; }
-template<> inline  int16_t Unpacker::part::value() const { return value<uint16_t>(); }
-template<> inline  int32_t Unpacker::part::value() const { return value<uint32_t>(); }
-template<> inline  int64_t Unpacker::part::value() const { return value<uint64_t>(); }
+template<> inline uint8_t Unpacker::part::fix<0xff>() const { return type_; }
+
+#define VALUE(T, code) \
+  template<> inline T Unpacker::part::value() const { return (code); }
+
+VALUE(uint8_t, as<uint8_t>());
+VALUE(uint16_t, ntohs(as<uint16_t>()));
+VALUE(uint32_t, ntohl(as<uint32_t>()));
+VALUE(uint64_t, be64toh(as<uint64_t>()));
+VALUE(int8_t, as<int8_t>());
+VALUE(int16_t, value<uint16_t>());
+VALUE(int32_t, value<uint32_t>());
+VALUE(int64_t, value<uint64_t>());
+
+#undef VALUE
+
 template<> inline float Unpacker::part::value() const {
   uint32_t i = value<uint32_t>();
   return reinterpret_cast<float &>(i);
