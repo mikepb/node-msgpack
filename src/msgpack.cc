@@ -95,13 +95,20 @@ NAN_METHOD(Unpack) {
     assert(Buffer::HasInstance(args[0]));
 
     Local<Value> result;
+    Local<Object> buf = args[0]->ToObject();
+
+    size_t len = Buffer::Length(buf);
+    if (len == 0) NanReturnUndefined();
+
+    Unpacker unpacker(Buffer::Data(buf), len);
 
     try {
-        result = Unpack(args[0]);
+        len = unpacker.unpack(result);
     } catch (msgpack_error &e) {
         return NanThrowError(e.what());
     }
 
+    buf->Set(NanSymbol("offset"), Integer::New(len));
     NanReturnValue(result);
 }
 
