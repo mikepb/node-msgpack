@@ -1,15 +1,10 @@
 #include <assert.h>
 
-#include <tr1/array>
-#include <tr1/unordered_set>
-#include <vector>
-
-#include <v8.h>
 #include <node.h>
 #include <node_buffer.h>
 #include <msgpack.h>
-#include "node_msgpack.h"
 
+#include "node_msgpack.h"
 #include "nan.h"
 
 using namespace v8;
@@ -102,7 +97,7 @@ NAN_METHOD(Unpack) {
     Local<Value> result;
 
     try {
-        result = MessagePack::Unpack(args[0]);
+        result = Unpack(args[0]);
     } catch (msgpack_error &e) {
         return NanThrowError(e.what());
     }
