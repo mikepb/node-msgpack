@@ -71,12 +71,12 @@ inline uint8_t msgpack_part::value() const {
 
 template<>
 inline uint16_t msgpack_part::value() const {
-  return be16toh(as().u16);
+  return ntohs(as().u16);
 }
 
 template<>
 inline uint32_t msgpack_part::value() const {
-  return be32toh(as().u32);
+  return ntohl(as().u32);
 }
 
 template<>
