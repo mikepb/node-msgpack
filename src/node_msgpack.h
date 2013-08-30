@@ -219,8 +219,19 @@ class msgpack_part_reader {
 public:
   msgpack_part_reader(char **ptr, char *end)
   : ptr_(ptr), end_(end), ref_(NULL), len_(0) {
-    type_ = (msgpack_part_union *)*ptr; inc(1);
-    data_ = (msgpack_part_union *)*ptr;
+  }
+
+  inline bool empty() const {
+    return end_ <= *ptr_;
+  }
+
+  inline bool next() {
+    bool not_empty = !empty();
+    if (not_empty) {
+      type_ = reinterpret_cast<msgpack_part_union *>(*ptr_); ptr_[0]++;
+      data_ = reinterpret_cast<msgpack_part_union *>(*ptr_);
+    }
+    return not_empty;
   }
 
 private:
@@ -228,41 +239,40 @@ private:
     *ptr_ += b; if (end_ < *ptr_) throw bad_data();
   }
 
-  inline uint16_t ntou(const uint16_t i) { return as.u16 = ntohs(i); }
-  inline uint32_t ntou(const uint32_t i) { return as.u32 = ntohl(i); }
-  inline uint64_t ntou(const uint64_t i) { return as.u64 = be64toh(i); }
+  inline uint16_t ntou(const uint16_t i) { return ntohs(i); }
+  inline uint32_t ntou(const uint32_t i) { return ntohl(i); }
+  inline uint64_t ntou(const uint64_t i) { return be64toh(i); }
   inline  int16_t ntoi(const uint16_t i) { return ntou(i); }
   inline  int32_t ntoi(const uint32_t i) { return ntou(i); }
   inline  int64_t ntoi(const uint64_t i) { return ntou(i); }
-  inline    float ntof(const uint32_t i) { ntou(i); return as.d32; }
-  inline   double ntod(const uint64_t i) { ntou(i); return as.d64; }
+  inline    float ntof(uint32_t i) { i = ntou(i); return reinterpret_cast<float &>(i); }
+  inline   double ntod(uint64_t i) { i = ntou(i); return reinterpret_cast<double &>(i); }
 
 public:
-  inline  uint8_t  ut(const uint8_t mask = 0xff) { return type_->u8 & mask; }
-  inline   int8_t  it() {         return type_->i8; }
+  template <uint8_t Mask>
+  inline  uint8_t  ut() const   { return type_->u8 & Mask; }
+  inline  uint8_t  ut() const   { return type_->u8; }
+  inline   int8_t  it() const   { return type_->i8; }
   inline  uint8_t  u8() { inc(1); return data_->u8; }
   inline uint16_t u16() { inc(2); return ntou(data_->u16); }
   inline uint32_t u32() { inc(4); return ntou(data_->u32); }
   inline uint64_t u64() { inc(8); return ntou(data_->u64); }
-  inline   int8_t  i8() {         return data_->i8; }
+  inline   int8_t  i8() const   { return data_->i8; }
   inline  int16_t i16() { inc(2); return ntoi(data_->u16); }
   inline  int32_t i32() { inc(4); return ntoi(data_->u32); }
   inline  int64_t i64() { inc(8); return ntoi(data_->u64); }
   inline    float d32() { inc(4); return ntof(data_->u32); }
   inline   double d64() { inc(8); return ntod(data_->u64); }
 
-  inline char *c() { len_ = ut(0x1f); ref_ = *ptr_; inc(len_); return ref_; }
-  inline char  *c8() { len_ =  u8(); ref_ = *ptr_; inc(len_); return ref_; }
-  inline char *c16() { len_ = u16(); ref_ = *ptr_; inc(len_); return ref_; }
-  inline char *c32() { len_ = u32(); ref_ = *ptr_; inc(len_); return ref_; }
+  inline char   *c() { len_ = ut<0x1f>();       ref_ = *ptr_;     inc(len_);     return ref_; }
+  inline char  *c8() { len_ = data_->u8;        ref_ = *ptr_ + 1; inc(len_ + 1); return ref_; }
+  inline char *c16() { len_ = ntou(data_->u16); ref_ = *ptr_ + 2; inc(len_ + 2); return ref_; }
+  inline char *c32() { len_ = ntou(data_->u32); ref_ = *ptr_ + 4; inc(len_ + 4); return ref_; }
 
 public:
-  inline char  *data() { return ref_; }
-  inline size_t size() { return len_; }
-  inline size_t bytes() { return end_ - *ptr_; }
-
-public:
-  msgpack_part_union as;
+  inline char  *data()  const { return ref_; }
+  inline size_t size()  const { return len_; }
+  inline size_t bytes() const { return end_ - *ptr_; }
 
 private:
   msgpack_part_union *type_;
@@ -306,14 +316,16 @@ inline Local<Value> MessagePack::Unpack(Local<Value> val) {
   Local<Object> buf = val->ToObject();
 
   size_t len = Buffer::Length(buf);
+  if (len == 0) return Local<Value>::New(Undefined());
+
   char *data = Buffer::Data(buf);
   char *tail = data + len;
 
+  msgpack_part_reader r(&data, tail);
   std::stack<unpak> stack;
-  Local<Value> result = Local<Value>::New(Undefined());
+  Local<Value> result;
 
-  while (data < tail) {
-    msgpack_part_reader r(&data, tail);
+  while (r.next()) {
     Local<Value> v;
     uint32_t l = 0;
 
@@ -395,7 +407,7 @@ inline Local<Value> MessagePack::Unpack(Local<Value> val) {
         break;
 
       case 0x90 ... 0x9f: // fixarray
-        l = r.ut(0x0f);
+        l = r.ut<0x0f>();
         v = Array::New(l);
         break;
 
@@ -410,7 +422,7 @@ inline Local<Value> MessagePack::Unpack(Local<Value> val) {
         break;
 
       case 0x80 ... 0x8f: // fixmap
-        l = r.ut(0x0f);
+        l = r.ut<0x0f>();
         v = Object::New();
         break;
 
