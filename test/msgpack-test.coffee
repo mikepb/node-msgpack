@@ -188,7 +188,7 @@ describe "binding", ->
       b = new Buffer s
       for i in [0...31]
         b[0] = 0xa0 + i
-        expect(unpack b).to.be s.substr(1, i)
+        expect(unpack b.slice(0, i + 1)).to.be s.substr(1, i)
       expect(unpack [0xa3, 0xe2, 0x88, 0x9e]).to.be "∞"
 
     it "should unpack str 8", ->
@@ -199,10 +199,10 @@ describe "binding", ->
       b[1] = 0
       for i in [0..0x0f]
         b[1] = i
-        expect(unpack b).to.be s.substr(2, i)
+        expect(unpack b.slice(0, i + 2)).to.be s.substr(2, i)
       for i in [0x10..0xff] by 3
         b[1] = i
-        expect(unpack b).to.be s.substr(2, i)
+        expect(unpack b.slice(0, i + 2)).to.be s.substr(2, i)
       expect(unpack [0xd9, 0x03, 0xe2, 0x88, 0x9e]).to.be "∞"
 
     it "should unpack str 16", ->
@@ -214,14 +214,14 @@ describe "binding", ->
       b[2] = 0
       for i in [0..0x0f]
         b[2] = i
-        expect(unpack b).to.be s.substr(3, i)
+        expect(unpack b.slice(0, i + 3)).to.be s.substr(3, i)
       for i in [0x10..0xfffc] by 397
         b[1] = (i & 0xff00) >> 8
         b[2] = i & 0xff
-        expect(unpack b).to.be s.substr(3, i)
+        expect(unpack b.slice(0, i + 3)).to.be s.substr(3, i)
       for i in [0xfd..0xff]
         b[2] = i
-        expect(unpack b).to.be s.substr(3, 0xff00 + i)
+        expect(unpack b.slice(0, 0xff00 + i + 3)).to.be s.substr(3, 0xff00 + i)
       expect(unpack [0xda, 0, 0x03, 0xe2, 0x88, 0x9e]).to.be "∞"
 
     it "should unpack str 32", ->
@@ -235,17 +235,17 @@ describe "binding", ->
       b[3] = 0
       for i in [0..0x0f]
         b[4] = i
-        expect(unpack b).to.be s.substr(5, i)
+        expect(unpack b.slice(0, i + 5)).to.be s.substr(5, i)
       for i in [0x10..0xffffc] by 12379
         b[2] = (i & 0xff0000) >> 16
         b[3] = (i & 0xff00) >> 8
         b[4] = i & 0xff
-        expect(unpack b).to.be s.substr(5, i)
+        expect(unpack b.slice(0, i + 5)).to.be s.substr(5, i)
       b[2] = 0x0f
       b[3] = 0xff
       for i in [0xfd..0xff]
         b[4] = i
-        expect(unpack b).to.be s.substr(5, 0xfff00 + i)
+        expect(unpack b.slice(0, 0xfff00 + i + 5)).to.be s.substr(5, 0xfff00 + i)
       expect(unpack [0xdb, 0, 0, 0, 0x03, 0xe2, 0x88, 0x9e]).to.be "∞"
 
     it "should unpack fixarray (null)", ->
