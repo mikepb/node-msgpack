@@ -32,7 +32,7 @@ union msgpack_part_union {
   double   d64;
 };
 
-struct msgpack_part {
+class msgpack_part {
 
   inline uint8_t type() const { return type_.u; }
 
@@ -53,6 +53,7 @@ struct msgpack_part {
     return *(msgpack_part_union *)(((char *)this) + 1);
   };
 
+private:
   const union {
     uint8_t u;
      int8_t i;
