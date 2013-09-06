@@ -21,11 +21,11 @@ namespace node_msgpack {
 class Packer {
 public:
   Packer(
-    const Flags flags = MSGPACK_FLAGS_NONE,
+    const uint32_t flags = 0,
     Local<Function> replacer = Local<Function>()
   ):
     size_(128),
-    flags_(static_cast<Flags>(flags | (replacer.IsEmpty() ? 0 : MSGPACK_HAS_REPLACER))),
+    flags_(flags | (replacer.IsEmpty() ? 0 : MSGPACK_HAS_REPLACER)),
     replacer_(replacer)
   {
     head_ = buf_ = reinterpret_cast<char *>(malloc(size_));
@@ -92,7 +92,7 @@ private:
   size_t size_;
 
 private:
-  const Flags flags_;
+  const uint32_t flags_;
   std::tr1::unordered_set<int> id_hashes_;
   Local<Function> replacer_;
   Local<String> to_iso_string_;

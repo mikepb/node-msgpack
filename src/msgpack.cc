@@ -12,7 +12,7 @@ using namespace node;
 using namespace node_msgpack;
 
 void free_buffer(char *data, void *hint) {
-    free(data);
+  free(data);
 }
 
 // var buf = msgpack.pack(obj, replacer, hint);
@@ -20,16 +20,21 @@ void free_buffer(char *data, void *hint) {
 // Returns a Buffer object representing the serialized state of the provided
 // JavaScript object.
 NAN_METHOD(Pack) {
-    NanScope();
-    try {
-        Packer packer;
-        packer.Pack(args);
-        Local<Value> buf = NanNewBufferHandle(
-            packer.Data(), packer.Length(), free_buffer, NULL);
-        NanReturnValue(buf);
-    } catch (std::exception &e) {
-        return NanThrowError(e.what());
-    }
+  NanScope();
+
+  assert(args.Length() == 3);
+  assert(args[1]->IsNull());
+  assert(args[2]->IsUint32());
+
+  try {
+    Packer packer(args[2]->Uint32Value());
+    packer.Pack(args[0]);
+    Local<Value> buf = NanNewBufferHandle(
+      packer.Data(), packer.Length(), free_buffer, NULL);
+    NanReturnValue(buf);
+  } catch (std::exception &e) {
+    return NanThrowError(e.what());
+  }
 }
 
 // var o = msgpack.unpack(buf);
@@ -38,37 +43,44 @@ NAN_METHOD(Pack) {
 // specified buffer. If the buffer does not contain a complete object, the
 // undefined value is returned.
 NAN_METHOD(Unpack) {
-    NanScope();
+  NanScope();
 
-    assert(args.Length() == 1);
-    assert(Buffer::HasInstance(args[0]));
+  assert(args.Length() == 1);
+  assert(Buffer::HasInstance(args[0]));
 
-    Local<Value> result;
-    Local<Object> buf = args[0]->ToObject();
+  Local<Value> result;
+  Local<Object> buf = args[0]->ToObject();
 
-    size_t len = Buffer::Length(buf);
-    if (len == 0) NanReturnUndefined();
+  size_t len = Buffer::Length(buf);
+  if (len == 0) NanReturnUndefined();
 
-    Unpacker unpacker(Buffer::Data(buf), len);
+  Unpacker unpacker(Buffer::Data(buf), len);
 
-    try {
-        len = unpacker.Unpack(result);
-    } catch (msgpack_error &e) {
-        return NanThrowError(e.what());
-    }
+  try {
+    len = unpacker.Unpack(result);
+  } catch (msgpack_error &e) {
+    return NanThrowError(e.what());
+  }
 
-    buf->Set(NanSymbol("offset"), Integer::New(len));
-    NanReturnValue(result);
+  buf->Set(NanSymbol("offset"), Integer::New(len));
+  NanReturnValue(result);
 }
 
 extern "C" void
 init(Handle<Object> exports) {
-    // exports.pack
-    exports->Set(NanSymbol("pack"),
-        FunctionTemplate::New(Pack)->GetFunction());
-    // exports.unpack
-    exports->Set(NanSymbol("unpack"),
-        FunctionTemplate::New(Unpack)->GetFunction());
+  // exports.pack
+  exports->Set(NanSymbol("pack"),
+    FunctionTemplate::New(Pack)->GetFunction());
+  // exports.unpack
+  exports->Set(NanSymbol("unpack"),
+    FunctionTemplate::New(Unpack)->GetFunction());
+  // constants
+  NODE_DEFINE_CONSTANT(exports, MSGPACK_FLAGS_NONE);
+  NODE_DEFINE_CONSTANT(exports, MSGPACK_NO_TOJSON);
+  NODE_DEFINE_CONSTANT(exports, MSGPACK_HAS_REPLACER);
+  NODE_DEFINE_CONSTANT(exports, MSGPACK_FUNCTION_TO_STRING);
+  NODE_DEFINE_CONSTANT(exports, MSGPACK_REGEXP_TO_STRING);
+  NODE_DEFINE_CONSTANT(exports, MSGPACK_DATE_TO_DOUBLE);
 }
 
 NODE_MODULE(msgpackBinding, init);
