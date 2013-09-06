@@ -226,7 +226,7 @@ describe "binding", ->
 
     it "should unpack str 32", ->
       @slow 500
-      # only test up to 1 MB
+      # only test up to ~5 KB
       s = crypto.randomBytes(0x90001).toString("hex")
       b = new Buffer s
       b[0] = 0xdb
@@ -330,11 +330,6 @@ describe "binding", ->
           j = 1
         expect(unpack b.slice(0, j)).to.eql t
 
-    # case 0x80 ... 0x8f: // fixmap
-    #   l = r.ut(0x0f);
-    #   v = Object::New();
-    #   break;
-
     # case 0xde: // map 16
     #   l = r.u16();
     #   v = Object::New();
@@ -345,9 +340,60 @@ describe "binding", ->
     #   v = Object::New();
     #   break;
 
-    # case 0xc4: // bin 8
-    # case 0xc5: // bin 16
-    # case 0xc6: // bin 32
+    it "should unpack bin 8", ->
+      @slow 500
+      b = crypto.randomBytes(257)
+      b[0] = 0xc4
+      for i in [0..4]
+        b[1] = i
+        expect(unpack b.slice(0, i + 2)).to.eql b.slice(2, i + 2)
+      for i in [5..250] by 5
+        b[1] = i
+        expect(unpack b.slice(0, i + 2)).to.eql b.slice(2, i + 2)
+      for i in [251..255]
+        b[1] = i
+        expect(unpack b.slice(0, i + 2)).to.eql b.slice(2, i + 2)
+
+    it "should unpack bin 16", ->
+      @slow 500
+      b = crypto.randomBytes(65538)
+      b[0] = 0xc5
+      for i in [0..4]
+        b[1] = 0
+        b[2] = i & 0xff
+        expect(unpack b.slice(0, i + 3)).to.eql b.slice(3, i + 3)
+      for i in [5..65530] by 251
+        b[1] = i >> 8
+        b[2] = i & 0xff
+        expect(unpack b.slice(0, i + 3)).to.eql b.slice(3, i + 3)
+      for i in [65531..65535]
+        b[1] = i >> 8
+        b[2] = i & 0xff
+        expect(unpack b.slice(0, i + 3)).to.eql b.slice(3, i + 3)
+
+    it "should unpack bin 32", ->
+      @slow 500
+      b = crypto.randomBytes(0x80005)
+      b[0] = 0xc6
+      for i in [0..4]
+        b[1] = 0
+        b[2] = 0
+        b[3] = 0
+        b[4] = i & 0xff
+        expect(unpack(b.slice(0, i + 5))).to.eql b.slice(5, i + 5)
+      for i in [5..0x7fffb] by 3001
+        b[1] = (i >> 24) & 0xff
+        b[2] = (i >> 16) & 0xff
+        b[3] = (i >> 8) & 0xff
+        b[4] = i & 0xff
+        expect(unpack(b.slice(0, i + 5))).to.eql b.slice(5, i + 5)
+      for i in [0x7fffc..0x80000]
+        b[1] = (i >> 24) & 0xff
+        b[2] = (i >> 16) & 0xff
+        b[3] = (i >> 8) & 0xff
+        b[4] = i & 0xff
+        expect(unpack(b.slice(0, i + 5))).to.eql b.slice(5, i + 5)
+
     # case 0xc7: // ext 8
     # case 0xc8: // ext 16
     # case 0xc9: // ext 32

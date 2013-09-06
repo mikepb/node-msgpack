@@ -92,8 +92,7 @@ private:
 
 private:
   inline bool next() {
-    if      (size_ <  offset_) throw bad_data();
-    else if (size_ == offset_) return false;
+    if (size_ == offset_) return false;
     part_ = reinterpret_cast<part *>(const_cast<char *>(head_) + offset_);
     offset_ += sizeof(part_->type());
     return true;
@@ -107,11 +106,16 @@ private:
   inline int8_t fix() const { return part_->fix(); }
 
   template <typename T>
-  inline T value() { offset_ += sizeof(T); return part_->value<T>(); }
+  inline T value() {
+    offset_ += sizeof(T);
+    if (size_ < offset_) throw bad_data();
+    return part_->value<T>();
+  }
 
   template <typename T>
   inline const char *data() {
     length_ = value<T>();
+    if (size_ < offset_ + length_) throw bad_data();
     const char *p = head_ + offset_;
     offset_ += length_;
     return p;
@@ -120,9 +124,16 @@ private:
   template <uint8_t Mask>
   inline const char *data() {
     length_ = fix<Mask>();
+    if (size_ < offset_ + length_) throw bad_data();
     const char *p = head_ + offset_;
     offset_ += length_;
     return p;
+  }
+
+private:
+  template <typename T>
+  inline Local<Object> buffer() {
+    return NanNewBufferHandle(const_cast<char *>(data<T>()), length_);
   }
 
 public:
@@ -193,8 +204,11 @@ public:
           l = value<uint32_t>(); break;
 
         case 0xc4: // bin 8
+          v = buffer<uint8_t>(); break;
         case 0xc5: // bin 16
+          v = buffer<uint16_t>(); break;
         case 0xc6: // bin 32
+          v = buffer<uint32_t>(); break;
 
         case 0xc7: // ext 8
         case 0xc8: // ext 16
