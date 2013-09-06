@@ -55,30 +55,39 @@ private:
   };
 
   struct stack_part {
-    stack_part(Local<Array> o, uint32_t l) : array(o), i(0), len(l) {}
-    stack_part(Local<Object> o, uint32_t l) : object(o), i(0), len(l) {}
-
-    inline Local<Value> value() const {
-      if (object.IsEmpty()) return array;
-      else                  return object;
-    }
-
-    inline void child(Local<Value> v) {
-      if (object.IsEmpty()) array->Set(i++, v);
-      else if (key.IsEmpty()) key = v;
-      else {
-        object->Set(key, v);
-        key.Clear();
-        i++;
+    stack_part(uint32_t l, bool o = false)
+    : i(0), len(o ? l * 2 : l), is_object(o) {
+      if (is_object) {
+        object = Object::New();
+      } else {
+        array = Array::New(len);
       }
     }
 
-    Local<Object> object;
+    inline Local<Value> value() const {
+      if (is_object) return object;
+      return array;
+    }
+
+    inline void child(Local<Value> v) {
+      if (!is_object) {
+        array->Set(i, v);
+      } else if (key.IsEmpty()) {
+        key = v;
+      } else {
+        object->Set(key, v);
+        key.Clear();
+      }
+      ++i;
+    }
+
     Local<Array> array;
+    Local<Object> object;
     Local<Value> key;
 
     uint32_t i;
-    uint32_t len;
+    const uint32_t len;
+    const bool is_object;
   };
 
 private:
@@ -202,26 +211,13 @@ public:
       }
 
       if (0 < l) {
-        switch (t) {
-          case 0xdf: {
-            Local<Object> o = Object::New();
-            if (!stack.empty()) stack.top().child(o);
-            stack.push(stack_part(o, l));
-            break;
-          }
-          case 0xdd: {
-            Local<Array> a = Array::New(l);
-            if (!stack.empty()) stack.top().child(a);
-            stack.push(stack_part(a, l));
-            break;
-          }
-        }
+        stack.push(stack_part(l, t == 0xdf));
         continue;
       }
 
       switch (t) {
         case 0xdf: v = Object::New(); break;
-        case 0xdd: v = Array::New();  break;
+        case 0xdd: v = Array::New(); break;
       }
 
       if (stack.empty()) {
@@ -237,6 +233,8 @@ public:
         if (stack.empty()) {
           result = parent.value();
           goto end;
+        } else {
+          stack.top().child(parent.value());
         }
       }
     }

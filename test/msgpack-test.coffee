@@ -256,7 +256,7 @@ describe "binding", ->
         expect(unpack b).to.eql t.slice(0, i)
 
     it "should unpack fixarray (fixint)", ->
-      t = (i for i in [1..16])
+      t = (i for i in [1..15])
       b = new Buffer(i for i in [0..16])
       for i in [0..15]
         b[0] = 0x90 + i
@@ -285,6 +285,50 @@ describe "binding", ->
     #   l = r.u32();
     #   v = Array::New(l);
     #   break;
+
+    it "should unpack fixmap (fixint)", ->
+      t = {}
+      b = new Buffer(33)
+      for i in [0..15]
+        b[0] = 0x80 + i
+        if 0 < i
+          j = i * 2 + 1
+          b[j - 2] = i
+          b[j - 1] = i
+          t[i] = i
+        else
+          j = 1
+        expect(unpack b.slice(0, j)).to.eql t
+
+    it "should unpack fixmap (fixarray)", ->
+      a = []
+      t = {}
+      b = new Buffer(33)
+      for i in [0..15]
+        b[0] = 0x80 + i
+        if 0 < i
+          j = i * 2 + 1
+          b[j - 2] = i
+          b[j - 1] = 0x90
+          t[i] = a
+        else
+          j = 1
+        expect(unpack b.slice(0, j)).to.eql t
+
+    it "should unpack fixmap (fixmap)", ->
+      o = {}
+      t = {}
+      b = new Buffer(33)
+      for i in [0..15]
+        b[0] = 0x80 + i
+        if 0 < i
+          j = i * 2 + 1
+          b[j - 2] = i
+          b[j - 1] = 0x80
+          t[i] = o
+        else
+          j = 1
+        expect(unpack b.slice(0, j)).to.eql t
 
     # case 0x80 ... 0x8f: // fixmap
     #   l = r.ut(0x0f);
