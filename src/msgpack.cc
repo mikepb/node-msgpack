@@ -11,73 +11,22 @@ using namespace v8;
 using namespace node;
 using namespace node_msgpack;
 
-static MessagePack global_msgpack;
-
-NAN_METHOD(SetOptions) {
-    NanScope();
-
-    assert(args.Length() == 1);
-    // assert(args[0]->IsUint32());
-
-    uint32_t onflags = 0;
-    uint32_t offlags = 0;
-
-    Local<String> date_to_num_sym = NanSymbol("dateToNum");
-    Local<String> fn_to_string_sym = NanSymbol("fnToString");
-    Local<String> re_to_string_sym = NanSymbol("reToString");
-    Local<String> to_json_sym = NanSymbol("toJSON");
-
-    // options
-    Local<Object> options;
-    if (args[0]->IsObject()) options = args[0]->ToObject();
-    if (options->Has(date_to_num_sym)) {
-        if (options->Get(date_to_num_sym)->BooleanValue())
-            onflags &= NODE_MSGPACK_DATE_DOUBLE;
-        else
-            offlags &= NODE_MSGPACK_DATE_DOUBLE;
-    }
-    if (options->Has(fn_to_string_sym)) {
-        if (options->Get(fn_to_string_sym)->BooleanValue())
-            onflags &= NODE_MSGPACK_FN_TOSTRING;
-        else
-            offlags &= NODE_MSGPACK_FN_TOSTRING;
-    }
-    if (options->Has(re_to_string_sym)) {
-        if (options->Get(re_to_string_sym)->BooleanValue())
-            onflags &= NODE_MSGPACK_RE_TOSTRING;
-        else
-            offlags &= NODE_MSGPACK_RE_TOSTRING;
-    }
-    if (options->Has(to_json_sym)) {
-        if (options->Get(to_json_sym)->BooleanValue())
-            onflags &= NODE_MSGPACK_CALL_TOJSON;
-        else
-            offlags &= NODE_MSGPACK_CALL_TOJSON;
-    }
-
-    global_msgpack.SetFlags(onflags);
-    global_msgpack.SetFlags(offlags, false);
-
-    NanReturnUndefined();
+void free_buffer(char *data, void *hint) {
+    free(data);
 }
 
-// var buf = msgpack.pack(obj[, obj ...]);
+// var buf = msgpack.pack(obj, replacer, hint);
 //
 // Returns a Buffer object representing the serialized state of the provided
-// JavaScript object. If more arguments are provided, their serialized state
-// will be accumulated to the end of the previous value(s).
-//
-// Any number of objects can be provided as arguments, and all will be
-// serialized to the same bytestream, back-to-back.
+// JavaScript object.
 NAN_METHOD(Pack) {
     NanScope();
-
     try {
-        if (args.Length() == 1) {
-            NanReturnValue(global_msgpack.Pack(args[0]));
-        } else {
-            NanReturnValue(global_msgpack.Pack(args));
-        }
+        Packer packer;
+        packer.Pack(args);
+        Local<Value> buf = NanNewBufferHandle(
+            packer.Data(), packer.Length(), free_buffer, NULL);
+        NanReturnValue(buf);
     } catch (std::exception &e) {
         return NanThrowError(e.what());
     }
@@ -120,9 +69,6 @@ init(Handle<Object> exports) {
     // exports.unpack
     exports->Set(NanSymbol("unpack"),
         FunctionTemplate::New(Unpack)->GetFunction());
-    // exports.setOptions
-    exports->Set(NanSymbol("setOptions"),
-        FunctionTemplate::New(SetOptions)->GetFunction());
 }
 
 NODE_MODULE(msgpackBinding, init);

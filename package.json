@@ -81,6 +81,6 @@
 		"msgpack2json": "./bin/msgpack2json"
 	},
 	"scripts": {
-		"test": "mocha --compilers coffee:coffee-script test/msgpack-test.coffee && ./run_tests"
+		"test": "mocha --compilers coffee:coffee-script test/*-test.coffee && ./run_tests"
 	}
 }
