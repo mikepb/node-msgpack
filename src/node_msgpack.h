@@ -9,10 +9,9 @@ namespace node_msgpack {
 
 #define MSGPACK_FLAGS_NONE              0x0000
 #define MSGPACK_NO_TOJSON               0x0001
-#define MSGPACK_HAS_REPLACER            0x0002
-#define MSGPACK_FUNCTION_TO_STRING      0x0004
-#define MSGPACK_REGEXP_TO_STRING        0x0008
-#define MSGPACK_DATE_TO_DOUBLE          0x0010
+#define MSGPACK_FUNCTION_TO_STRING      0x0002
+#define MSGPACK_REGEXP_TO_STRING        0x0004
+#define MSGPACK_DATE_TO_DOUBLE          0x0008
 
 class msgpack_error : public std::exception {
 public:

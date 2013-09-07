@@ -23,10 +23,7 @@ public:
   Packer(
     const uint32_t flags = 0,
     Local<Function> replacer = Local<Function>()
-  ):
-    size_(128),
-    flags_(flags | (replacer.IsEmpty() ? 0 : MSGPACK_HAS_REPLACER)),
-    replacer_(replacer)
+  ): size_(128), flags_(flags), replacer_(replacer)
   {
     head_ = buf_ = reinterpret_cast<char *>(malloc(size_));
     if (!buf_) throw std::bad_alloc();
@@ -44,6 +41,11 @@ public:
 public:
   inline char *Data() const { return buf_; }
   inline size_t Length() const { return head_ - buf_; }
+
+private:
+  void BasicPackValue(const Local<Value> &val);
+  inline void BasicPackObject(const Local<Value> &val);
+  inline void BasicPackArray(const Local<Value> &val);
 
 private:
   void PackValue(const Local<Value> &val);
@@ -77,6 +79,12 @@ private:
   inline int insert_if_absent(const Local<Value> &o);
   inline void erase_id(const int id);
   inline const Local<Value> to_json(const Local<Value> &val);
+  inline const Local<Value> replace(const Local<Value> &val);
+  inline const Local<Value> replace(
+    const Local<Object> &self,
+    const Local<Value> &key,
+    const Local<Value> &val);
+  inline bool pack_primitive(const Local<Value> &val);
   inline void pack_string(const Local<Value> &val);
   inline void pack_result(const Local<Value> &val, const Local<String> &sym);
   inline void pack_number(const Local<Value> &val);
@@ -101,12 +109,18 @@ private:
 };
 
 inline void Packer::Pack(const Local<Value> &val) {
-  PackValue(val);
+#if 0
+  // segfaults at the moment
+  if (!replacer_.IsEmpty() && replacer_->IsFunction()) PackValue(val);
+  else BasicPackValue(val);
+#else
+  BasicPackValue(val);
+#endif
 }
 
 inline void Packer::Pack(const Local<Array> &vals) {
   for (uint32_t i = 0; i < vals->Length(); i++) {
-    PackValue(vals->Get(i));
+    Pack(vals->Get(i));
   }
 }
 
@@ -117,38 +131,78 @@ inline void Packer::Pack(const Arguments& args)
 #endif
 {
   for (int i = 0; i < args.Length(); i++) {
-    PackValue(args[i]);
+    Pack(args[i]);
+  }
+}
+
+void Packer::BasicPackValue(const Local<Value> &v) {
+  const Local<Value> val = flags_ & MSGPACK_NO_TOJSON ? v : to_json(v);
+  if (pack_primitive(val)) {
+    // no-op
+  } else if (val->IsObject()) {
+    if (val->IsArray()) {
+      BasicPackArray(val);
+    } else {
+      BasicPackObject(val);
+    }
+  } else {
+    PackMap(0); /* external, etc */
+  }
+}
+
+inline void Packer::BasicPackObject(const Local<Value> &val) {
+  Local<Object> o = static_cast< Local<Value> >(val).As<Object>();
+  Local<Array> a = o->GetOwnPropertyNames();
+  uint32_t len = a->Length();
+
+  typedef std::pair< Local<Value>, Local<Value> > kvpair_t;
+
+  std::vector<kvpair_t> kvpairs;
+  for (uint32_t i = 0; i < len; i++) {
+    Local<Value> k = a->Get(i);
+    Local<Value> v = o->Get(k);
+    if (v->IsFunction() & !(flags_ & MSGPACK_FUNCTION_TO_STRING)) continue;
+    kvpairs.push_back(std::make_pair(k, v));
+  }
+
+  PackMap(kvpairs.size());
+
+  if (0 < kvpairs.size()) {
+    int id = insert_if_absent(o);
+    for (std::vector<kvpair_t>::iterator it = kvpairs.begin();
+         it != kvpairs.end(); ++it)
+    {
+      BasicPackValue(it->first);
+      BasicPackValue(it->second);
+    }
+    erase_id(id);
+  }
+}
+
+inline void Packer::BasicPackArray(const Local<Value> &val) {
+  Local<Array> a = static_cast< Local<Value> >(val).As<Array>();
+  uint32_t len = a->Length();
+
+  PackArray(len);
+
+  if (0 < len) {
+    int id = insert_if_absent(a);
+    for (uint32_t i = 0; i < len; ++i) {
+      BasicPackValue(a->Get(i));
+    }
+    erase_id(id);
   }
 }
 
 void Packer::PackValue(const Local<Value> &v) {
-  const Local<Value> val = flags_ & MSGPACK_NO_TOJSON ? v : to_json(v);
-  if (val->IsString() || val->IsStringObject()) {
-    pack_string(val);
-  } else if (val->IsNumber() || val->IsNumberObject()) {
-    pack_number(val);
-  } else if (val->IsBoolean() || val->IsBooleanObject()) {
-    pack_boolean(val);
-  } else if (val->IsNull() || val->IsUndefined()) {
-    PackNil();
-  } else if (val->IsDate()) {
-    if (flags_ & MSGPACK_DATE_TO_DOUBLE) pack_date_double(val);
-    else pack_date(val);
-  } else if (Buffer::HasInstance(val)) {
-    pack_buffer(val);
-  } else if (val->IsRegExp()) {
-    if (flags_ & MSGPACK_REGEXP_TO_STRING) {
-      if (to_string_.IsEmpty()) to_string_ = NanSymbol("toString");
-      pack_result(val, to_string_);
-    } else {
-      PackMap(0);
-    }
-  } else if (val->IsFunction()) {
-    if (flags_ & MSGPACK_FUNCTION_TO_STRING) {
-      pack_result(val, to_string_);
-    } else {
-      PackNil();
-    }
+  assert(!v.IsEmpty());
+  const Local<Value> json = flags_ & MSGPACK_NO_TOJSON ? v : to_json(v);
+  assert(!json.IsEmpty());
+  const Local<Value> val = replace(json);
+  assert(!val.IsEmpty());
+
+  if (pack_primitive(val)) {
+    // no-op
   } else if (val->IsObject()) {
     if (val->IsArray()) {
       PackArray(val);
@@ -170,8 +224,10 @@ inline void Packer::PackObject(const Local<Value> &val) {
   std::vector<kvpair_t> kvpairs;
   for (uint32_t i = 0; i < len; i++) {
     Local<Value> k = a->Get(i);
-    Local<Value> v = o->Get(k);
-    if (v->IsFunction()) continue;
+    Local<Value> w = o->Get(k);
+    Local<Value> v = replace(o, k, w);
+    if (v->IsFunction() & !(flags_ & MSGPACK_FUNCTION_TO_STRING)) continue;
+    if (v->IsUndefined()) continue;
     kvpairs.push_back(std::make_pair(k, v));
   }
 
@@ -198,7 +254,8 @@ inline void Packer::PackArray(const Local<Value> &val) {
   if (0 < len) {
     int id = insert_if_absent(a);
     for (uint32_t i = 0; i < len; ++i) {
-      PackValue(a->Get(i));
+      Local<Value> v = replace(a, Integer::New(i), a->Get(i));
+      PackValue(v);
     }
     erase_id(id);
   }
@@ -529,6 +586,57 @@ inline const Local<Value> Packer::to_json(const Local<Value> &v) {
   return v;
 }
 
+inline const Local<Value> Packer::replace(
+  const Local<Object> &self,
+  const Local<Value> &key,
+  const Local<Value> &val
+) {
+  assert(!self.IsEmpty());
+  assert(!key.IsEmpty());
+  assert(!val.IsEmpty());
+  Local<Value> argv[2] = { key, val };
+  return replacer_->Call(self, 2, argv);
+}
+
+inline const Local<Value> Packer::replace(const Local<Value> &val) {
+  NanScope();
+  assert(!val.IsEmpty());
+  Local<Value> argv[2] = { Local<Value>::New(Undefined()), val };
+  return replacer_->Call(Context::GetCurrent()->Global(), 2, argv);
+}
+
+inline bool Packer::pack_primitive(const Local<Value> &val) {
+  if (val->IsString() || val->IsStringObject()) {
+    pack_string(val);
+  } else if (val->IsNumber() || val->IsNumberObject()) {
+    pack_number(val);
+  } else if (val->IsBoolean() || val->IsBooleanObject()) {
+    pack_boolean(val);
+  } else if (val->IsNull() || val->IsUndefined()) {
+    PackNil();
+  } else if (val->IsDate()) {
+    if (flags_ & MSGPACK_DATE_TO_DOUBLE) pack_date_double(val);
+    else pack_date(val);
+  } else if (Buffer::HasInstance(val)) {
+    pack_buffer(val);
+  } else if (val->IsRegExp()) {
+    if (flags_ & MSGPACK_REGEXP_TO_STRING) {
+      if (to_string_.IsEmpty()) to_string_ = NanSymbol("toString");
+      pack_result(val, to_string_);
+    } else {
+      PackMap(0);
+    }
+  } else if (val->IsFunction()) {
+    if (flags_ & MSGPACK_FUNCTION_TO_STRING) {
+      pack_result(val, to_string_);
+    } else {
+      PackNil();
+    }
+  } else {
+    return false;
+  }
+  return true;
+}
 
 inline void Packer::pack_string(const Local<Value> &val) {
   Local<String> str = static_cast< Local<Value> >(val).As<String>();

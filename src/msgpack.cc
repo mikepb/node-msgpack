@@ -23,11 +23,13 @@ NAN_METHOD(Pack) {
   NanScope();
 
   assert(args.Length() == 3);
-  assert(args[1]->IsNull());
+  assert(args[1]->IsFunction() || args[1]->IsUndefined());
   assert(args[2]->IsUint32());
 
   try {
-    Packer packer(args[2]->Uint32Value());
+    Packer packer = args[1]->IsFunction()
+      ? Packer(args[2]->Uint32Value(), args[1].As<Function>())
+      : Packer(args[2]->Uint32Value());
     packer.Pack(args[0]);
     Local<Value> buf = NanNewBufferHandle(
       packer.Data(), packer.Length(), free_buffer, NULL);
@@ -77,7 +79,6 @@ init(Handle<Object> exports) {
   // constants
   NODE_DEFINE_CONSTANT(exports, MSGPACK_FLAGS_NONE);
   NODE_DEFINE_CONSTANT(exports, MSGPACK_NO_TOJSON);
-  NODE_DEFINE_CONSTANT(exports, MSGPACK_HAS_REPLACER);
   NODE_DEFINE_CONSTANT(exports, MSGPACK_FUNCTION_TO_STRING);
   NODE_DEFINE_CONSTANT(exports, MSGPACK_REGEXP_TO_STRING);
   NODE_DEFINE_CONSTANT(exports, MSGPACK_DATE_TO_DOUBLE);
